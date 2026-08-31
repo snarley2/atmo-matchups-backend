@@ -69,9 +69,65 @@ const sanitizeLiveName = (value) => {
   return name || `User${Math.floor(1000 + Math.random() * 9000)}`;
 };
 
+const ADMIN_SESSION_HOURS = 12;
+const adminPassword = String(process.env.ADMIN_LOGIN_PASSWORD || "");
+const adminSessionSecret = String(process.env.ADMIN_SESSION_SECRET || adminPassword);
+
+function isAdminRole(value) {
+  const role = String(value || "").trim().toLowerCase();
+  if (!role) return false;
+  return role === "trainer" || role === "manager" || role === "admin" || role === "owner" ||
+    role.includes("trainer") || role.includes("manager") || role.includes("director");
+}
+
+function safeEqualText(a, b) {
+  const left = Buffer.from(String(a || ""));
+  const right = Buffer.from(String(b || ""));
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+
+function issueAdminToken(agent) {
+  if (!adminSessionSecret) throw new Error("ADMIN_SESSION_SECRET or ADMIN_LOGIN_PASSWORD is not configured");
+  const payload = Buffer.from(JSON.stringify({
+    repKey: agent.repKey,
+    repName: agent.repName,
+    role: agent.repType,
+    exp: Date.now() + ADMIN_SESSION_HOURS * 60 * 60 * 1000,
+  })).toString("base64url");
+  const signature = crypto.createHmac("sha256", adminSessionSecret).update(payload).digest("base64url");
+  return `${payload}.${signature}`;
+}
+
+function verifyAdminToken(token) {
+  if (!token || !adminSessionSecret) return null;
+  const [payload, signature] = String(token).split(".");
+  if (!payload || !signature) return null;
+  const expected = crypto.createHmac("sha256", adminSessionSecret).update(payload).digest("base64url");
+  if (!safeEqualText(signature, expected)) return null;
+  try {
+    const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    if (!data?.repKey || !isAdminRole(data.role) || Number(data.exp) <= Date.now()) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+function bearerToken(req) {
+  return String(req.get("Authorization") || "").replace(/^Bearer\s+/i, "").trim();
+}
+
+function requireAdmin(req, res, next) {
+  const session = verifyAdminToken(bearerToken(req));
+  if (!session) return res.status(401).json({ error: "Admin login required" });
+  req.admin = session;
+  next();
+}
+
 io.on("connection", (socket) => {
   socket.data.actor = sanitizeLiveName(socket.handshake.auth?.actor);
-  console.log(`[live] connected ${socket.id} as ${socket.data.actor}`);
+  socket.data.admin = verifyAdminToken(socket.handshake.auth?.token);
+  console.log(`[live] connected ${socket.id} as ${socket.data.actor}${socket.data.admin ? " [admin]" : ""}`);
 
   socket.on("presence:join", ({ actor } = {}) => {
     socket.data.actor = sanitizeLiveName(actor);
@@ -84,6 +140,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("matchups:state", (payload = {}) => {
+    if (!socket.data.admin) return;
     const groups = Array.isArray(payload.groups) ? payload.groups : [];
     socket.broadcast.emit("matchups:state", {
       groups,
@@ -94,6 +151,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("drag:start", (payload = {}) => {
+    if (!socket.data.admin) return;
     socket.broadcast.emit("drag:start", {
       ...payload,
       socketId: socket.id,
@@ -103,6 +161,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("drag:move", (payload = {}) => {
+    if (!socket.data.admin) return;
     // No DB/Sheets write here: this path is intentionally cheap enough for 60fps.
     socket.broadcast.volatile.emit("drag:move", {
       ...payload,
@@ -112,6 +171,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("drag:end", () => {
+    if (!socket.data.admin) return;
     socket.broadcast.emit("drag:end", { socketId: socket.id });
   });
 
@@ -209,11 +269,35 @@ app.get("/api/bootstrap", async (_req, res, next) => {
   next(error);
 });
 
+app.post("/api/auth/admin", async (req, res, next) => {
+  try {
+    if (!adminPassword) return res.status(503).json({ error: "ADMIN_LOGIN_PASSWORD is not configured on the server" });
+    const password = String(req.body.password || "");
+    if (!safeEqualText(password, adminPassword)) return res.status(403).json({ error: "Invalid admin password" });
+
+    const agents = await getAgents();
+    const requestedKey = String(req.body.repKey || "").trim();
+    const requestedName = String(req.body.repName || "").trim().toLowerCase();
+    const agent = agents.find((item) => requestedKey && item.repKey === requestedKey) ||
+      agents.find((item) => requestedName && String(item.repName || "").trim().toLowerCase() === requestedName);
+
+    if (!agent) return res.status(404).json({ error: "Admin user not found" });
+    if (!isAdminRole(agent.repType)) return res.status(403).json({ error: "Admin access is limited to trainers and above" });
+
+    const token = issueAdminToken(agent);
+    res.json({ token, user: { repKey: agent.repKey, repName: agent.repName, repType: agent.repType } });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/auth/admin/me", requireAdmin, async (req, res) => {
+  res.json({ user: { repKey: req.admin.repKey, repName: req.admin.repName, repType: req.admin.role } });
+});
+
 app.get("/api/agents", async (_req, res, next) => {
   try { res.json(await getAgents()); } catch (error) { next(error); }
 });
 
-app.post("/api/agents", async (req, res, next) => {
+app.post("/api/agents", requireAdmin, async (req, res, next) => {
   try {
     const agents = await getAgents();
     const agent = {
@@ -236,7 +320,7 @@ app.post("/api/agents", async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
-app.put("/api/agents/:repKey", async (req, res, next) => {
+app.put("/api/agents/:repKey", requireAdmin, async (req, res, next) => {
   try {
     const agents = await getAgents();
     const index = agents.findIndex((agent) => agent.repKey === req.params.repKey);
@@ -247,7 +331,7 @@ app.put("/api/agents/:repKey", async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
-app.delete("/api/agents/:repKey", async (req, res, next) => {
+app.delete("/api/agents/:repKey", requireAdmin, async (req, res, next) => {
   try {
     const agents = await getAgents();
     const nextAgents = agents.filter((agent) => agent.repKey !== req.params.repKey);
@@ -257,7 +341,7 @@ app.delete("/api/agents/:repKey", async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
-app.post("/api/matchups/auto", async (req, res, next) => {
+app.post("/api/matchups/auto", requireAdmin, async (req, res, next) => {
   try {
     const [agents, gaps, performance] = await Promise.all([getAgents(), getGaps(), getPerformanceTabs()]);
     const combined = combineAgentsAndGaps(agents, gaps, performance);
@@ -273,7 +357,7 @@ app.get("/api/matchups/draft", async (_req, res, next) => {
   try { res.json(await getDraftMatchups()); } catch (error) { next(error); }
 });
 
-app.put("/api/matchups/draft", async (req, res, next) => {
+app.put("/api/matchups/draft", requireAdmin, async (req, res, next) => {
   try {
     const date = String(req.body.date || new Date().toISOString().slice(0, 10));
     const groups = Array.isArray(req.body.groups) ? req.body.groups : [];
@@ -285,15 +369,14 @@ app.put("/api/matchups/draft", async (req, res, next) => {
       at: new Date().toISOString(),
     });
     res.json(saved);
-    res.json(await saveDraftMatchups({ date, groups }));
   } catch (error) { next(error); }
 });
 
-app.get("/api/matchups/final", async (_req, res, next) => {
+app.get("/api/matchups/final", requireAdmin, async (_req, res, next) => {
   try { res.json(await getFinalMatchups()); } catch (error) { next(error); }
 });
 
-app.post("/api/matchups", async (req, res, next) => {
+app.post("/api/matchups", requireAdmin, async (req, res, next) => {
   try {
     const date = String(req.body.date || new Date().toISOString().slice(0, 10));
     const groups = Array.isArray(req.body.groups) ? req.body.groups : [];
@@ -349,7 +432,7 @@ app.post("/api/suggestions", async (req, res, next) => {
   }
 });
 
-app.get("/api/manual-numbers", async (_req, res, next) => {
+app.get("/api/manual-numbers", requireAdmin, async (_req, res, next) => {
   try {
     res.json(await getManualNumbers());
   } catch (error) {
@@ -402,7 +485,7 @@ app.post("/api/manual-numbers", async (req, res, next) => {
   }
 });
 
-app.get("/api/field-notes", async (_req, res, next) => {
+app.get("/api/field-notes", requireAdmin, async (_req, res, next) => {
   try {
     res.json(await getFieldNotes());
   } catch (error) {
@@ -410,7 +493,7 @@ app.get("/api/field-notes", async (_req, res, next) => {
   }
 });
 
-app.post("/api/field-notes", async (req, res, next) => {
+app.post("/api/field-notes", requireAdmin, async (req, res, next) => {
   try {
     const repName = String(req.body.repName || "").trim().slice(0, 120);
     const noteText = String(req.body.note || "").trim().slice(0, 5000);
