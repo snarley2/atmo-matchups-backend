@@ -177,11 +177,18 @@ function focusForRep(agent) {
   return { label: chosen.label, key: chosen.key, ratio: chosen.ratio, shortfall: chosen.shortfall };
 }
 
-function activeTrainees(agents) {
-  return agents.filter((agent) => lower(agent.attendance || "in") === "in" && !BLOCKED_REP_TYPES.has(lower(agent.repType)));
+function isPresent(agent) {
+  // Attendance from the UI is the source of truth for auto-generation.
+  // Only people explicitly marked "in" may be matched or selected to lead.
+  return lower(agent?.attendance || "in") === "in";
 }
+
+function activeTrainees(agents) {
+  return agents.filter((agent) => isPresent(agent) && !BLOCKED_REP_TYPES.has(lower(agent.repType)));
+}
+
 function activeTrainers(agents) {
-  return agents.filter((agent) => TRAINER_TYPES.has(lower(agent.repType)) && lower(agent.attendance || "in") === "in");
+  return agents.filter((agent) => TRAINER_TYPES.has(lower(agent.repType)) && isPresent(agent));
 }
 
 function chunkBalanced(reps, maxSize = 4) {
@@ -215,7 +222,7 @@ function leadershipCandidates(agents, trainersOnly) {
   // Leaders must currently be marked Vetted.
   const leaders = agents
     .filter((agent) =>
-      lower(agent.attendance || "in") === "in" &&
+      isPresent(agent) &&
       lower(agent.repType) === "leader" &&
       lower(agent.experienceLevel) === "vetted"
     )
@@ -395,10 +402,16 @@ function buildTeamGroups(reps, maxSize) {
 
 export function generateGroups(agents, options = {}) {
   const normalized = typeof options === "number" ? { groupSize: options } : options || {};
-  const maxSize = Math.max(2, Math.min(4, Number(normalized.groupSize || normalized.maxGroupSize || 4)));
+  // Auto-generated groups are capped at 4 total people INCLUDING the leader.
+  // Reserve one seat for the coach by limiting the generated trainee side to 3.
+  // Manual matchup editing remains unrestricted.
+  const requestedSize = Math.max(2, Math.min(4, Number(normalized.groupSize || normalized.maxGroupSize || 4)));
+  const traineeMaxSize = Math.min(3, requestedSize);
   const groupingMode = normalized.groupingMode === "team" ? "team" : "gaps";
   const trainersOnly = Boolean(normalized.trainersOnly);
   const reps = activeTrainees(agents);
-  const groups = groupingMode === "team" ? buildTeamGroups(reps, maxSize) : buildGapGroups(reps, maxSize);
+  const groups = groupingMode === "team"
+    ? buildTeamGroups(reps, traineeMaxSize)
+    : buildGapGroups(reps, traineeMaxSize);
   return assignLeaders(groups, agents, trainersOnly);
 }
