@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+.cromhe-profile/
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Google credentials
+google-service-account.json
+service-account.json
+credentials.json
+client_secret.json
+
+# Generated output
+outputs/
+*.log
+
+# Local browser/session data
+user-data/
+chrome-profile/
+.cache/
+
+# Operating system/editor files
+.DS_Store
+Thumbs.db
+.vscode/
