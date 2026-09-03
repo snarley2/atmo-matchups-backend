@@ -1,0 +1,23 @@
+{
+  "name": "atmo-matchups-backend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "server": "node server/index.mjs",
+    "dev:server": "node --watch server/index.mjs",
+    "run": "node run.mjs",
+    "run:last-worked": "node last-day-worked.mjs",
+    "generate:gaps": "node generate-team-rep-gaps.mjs",
+    "generate:matchups": "node generate-matchups-with-overrides.mjs",
+    "write:agents": "node write-agents-to-sheet.mjs"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.1",
+    "express": "^5.1.0",
+    "googleapis": "^156.0.0",
+    "node-cron": "^4.2.1",
+    "puppeteer": "^25.4.0",
+    "socket.io": "^4.8.3"
+  }
+}
