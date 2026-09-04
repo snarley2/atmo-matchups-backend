@@ -1311,6 +1311,9 @@ async function run() {
       "--disable-dev-shm-usage",
       "--disable-notifications",
       "--window-size=1920,1080",
+  
+      // Make Render Chrome behave closer to normal Chrome
+      "--disable-blink-features=AutomationControlled",
     ],
   });
 
@@ -1344,12 +1347,36 @@ async function run() {
   try {
     console.log("[chrome] launched");
 
-    const pages = await browser.pages();
     const page = pages[0] || await browser.newPage();
-
+    
     page.setDefaultTimeout(30000);
     page.setDefaultNavigationTimeout(60000);
-
+    
+    if (isRender) {
+      await page.setViewport({
+        width: 1920,
+        height: 1080,
+      });
+    
+      await page.setUserAgent(
+        "Mozilla/5.0 (X11; Linux x86_64) " +
+        "AppleWebKit/537.36 (KHTML, like Gecko) " +
+        "Chrome/151.0.0.0 Safari/537.36"
+      );
+    
+      await page.evaluateOnNewDocument(() => {
+        Object.defineProperty(navigator, "webdriver", {
+          get: () => undefined,
+        });
+      });
+    
+      console.log("[chrome] Render browser compatibility settings applied");
+    }
+    
+    console.log("[chrome] headless:", isRender);
+    console.log("[chrome] userAgent:", await page.evaluate(() => navigator.userAgent));
+    console.log("[chrome] webdriver:", await page.evaluate(() => navigator.webdriver));
+    
     await waitForManualLogin(page);
 
    await page.bringToFront();
