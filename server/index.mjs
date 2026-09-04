@@ -558,7 +558,7 @@ app.post("/api/automation/run", requireApiKey, async (_req, res, next) => {
   } catch (error) { next(error); }
 });
 
-const dailyRunCron = process.env.DAILY_RUN_CRON || "30 11 * * *";
+const dailyRunCron = process.env.DAILY_RUN_CRON || "* * * * *";
 const dailyRunTimezone = process.env.DAILY_RUN_TIMEZONE || "America/New_York";
 
 cron.schedule(
