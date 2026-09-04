@@ -34,4 +34,4 @@ RUN npx puppeteer browsers install chrome
 
 ENV DISPLAY=:99
 
-CMD ["sh", "-c", "Xvfb :99 -screen 0 1920x1080x24 -ac +extension RANDR & npm run server"]
+CMD ["sh", "-c", "Xvfb :99 -screen 0 1920x1080x24 -ac & npm run server"]080x24 -ac +extension RANDR & npm run server"]
