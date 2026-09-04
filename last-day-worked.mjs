@@ -757,7 +757,7 @@ async function waitForManualLogin(page) {
       return alreadyOnFieldDay || Boolean(assessmentButton);
     },
     {
-      timeout: 0,
+      timeout: 60000,
     }
   );
 
@@ -1296,7 +1296,7 @@ async function run() {
   const isRender = Boolean(process.env.RENDER);
 
   const browser = await puppeteer.launch({
-    headless: isRender ? true : false,
+    headless: false,
   
     ...(isRender ? {} : { executablePath: CHROME_PATH }),
     ...(isRender ? {} : { userDataDir: CHROME_USER_DATA_DIR }),
@@ -1311,9 +1311,7 @@ async function run() {
       "--disable-dev-shm-usage",
       "--disable-notifications",
       "--window-size=1920,1080",
-  
-      // Make Render Chrome behave closer to normal Chrome
-      "--disable-blink-features=AutomationControlled",
+
     ],
   });
 
@@ -1364,12 +1362,6 @@ async function run() {
         "AppleWebKit/537.36 (KHTML, like Gecko) " +
         "Chrome/151.0.0.0 Safari/537.36"
       );
-    
-      await page.evaluateOnNewDocument(() => {
-        Object.defineProperty(navigator, "webdriver", {
-          get: () => undefined,
-        });
-      });
     
       console.log("[chrome] Render browser compatibility settings applied");
     }
