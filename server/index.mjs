@@ -561,26 +561,60 @@ app.post("/api/automation/run", requireApiKey, async (_req, res, next) => {
 let automationRunning = false;
 
 const dailyRunCron = process.env.DAILY_RUN_CRON || "* * * * *";
-const dailyRunTimezone = process.env.DAILY_RUN_TIMEZONE || "America/New_York";
+const dailyRunTimezone =
+  process.env.DAILY_RUN_TIMEZONE || "America/New_York";
+
+console.log("==================================================");
+console.log("[scheduler] Scheduler initializing");
+console.log(`[scheduler] Cron: ${dailyRunCron}`);
+console.log(`[scheduler] Timezone: ${dailyRunTimezone}`);
+console.log(`[scheduler] Server time: ${new Date().toISOString()}`);
+console.log("==================================================");
 
 cron.schedule(
   dailyRunCron,
   async () => {
-    if (automationRunning) {
-      console.log("[scheduler] Previous automation still running — skipping this minute.");
+    const triggerTime = new Date();
+
+    console.log("");
+    console.log("==================================================");
+    console.log("[scheduler] ⏰ TRIGGER FIRED");
+    console.log(`[scheduler] Trigger time: ${triggerTime.toISOString()}`);
+    console.log(`[scheduler] automationRunning: ${automationRunning}`);
+    console.log(
+      `[scheduler] run.mjs reports running: ${isDailyAutomationRunning()}`
+    );
+    console.log("==================================================");
+
+    if (automationRunning || isDailyAutomationRunning()) {
+      console.log(
+        "[scheduler] ⏭️ SKIPPED - previous automation is still running."
+      );
       return;
     }
 
     automationRunning = true;
 
     try {
-      console.log("[scheduler] Starting automation...");
-      await runDailyAutomation();
-      console.log("[scheduler] Automation finished.");
+      console.log("[scheduler] ▶️ Calling runDailyAutomation()...");
+
+      const result = await runDailyAutomation();
+
+      console.log("[scheduler] ✅ runDailyAutomation() resolved");
+      console.log("[scheduler] Result:", result);
     } catch (err) {
-      console.error("[scheduler] Automation failed:", err);
+      console.error("[scheduler] ❌ AUTOMATION FAILED");
+      console.error("[scheduler] Error message:", err?.message);
+      console.error("[scheduler] Full error:", err);
     } finally {
       automationRunning = false;
+
+      console.log(
+        `[scheduler] 🏁 Trigger complete at ${new Date().toISOString()}`
+      );
+      console.log("[scheduler] Ready for next trigger.");
+      console.log("==================================================");
+      console.log("");
     }
   },
   {
@@ -595,7 +629,17 @@ app.use((error, _req, res, _next) => {
 });
 
 httpServer.listen(port, "0.0.0.0", () => {
-  console.log(`[server] ATMO API running at http://localhost:${port}`);
+  console.log("");
+  console.log("==================================================");
+  console.log("[server] ✅ ATMO BACKEND IS RUNNING");
+  console.log(`[server] Port: ${port}`);
+  console.log(`[server] Started: ${new Date().toISOString()}`);
+  console.log(`[server] Node version: ${process.version}`);
+  console.log(`[server] PID: ${process.pid}`);
   console.log(`[server] Allowed origins: ${allowedOrigins.join(", ")}`);
-  console.log(`[scheduler] Daily run: ${dailyRunCron} (${dailyRunTimezone})`);
+  console.log(`[scheduler] Cron: ${dailyRunCron}`);
+  console.log(`[scheduler] Timezone: ${dailyRunTimezone}`);
+  console.log("[scheduler] Waiting for next trigger...");
+  console.log("==================================================");
+  console.log("");
 });
