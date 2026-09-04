@@ -558,23 +558,34 @@ app.post("/api/automation/run", requireApiKey, async (_req, res, next) => {
   } catch (error) { next(error); }
 });
 
+let automationRunning = false;
+
 const dailyRunCron = process.env.DAILY_RUN_CRON || "* * * * *";
 const dailyRunTimezone = process.env.DAILY_RUN_TIMEZONE || "America/New_York";
 
 cron.schedule(
   dailyRunCron,
   async () => {
-    console.log(`[scheduler] Triggered at ${new Date().toISOString()}`);
+    if (automationRunning) {
+      console.log("[scheduler] Previous automation still running — skipping this minute.");
+      return;
+    }
+
+    automationRunning = true;
+
     try {
+      console.log("[scheduler] Starting automation...");
       await runDailyAutomation();
-    } catch (error) {
-      console.error("[scheduler] Scheduled automation failed:", error);
+      console.log("[scheduler] Automation finished.");
+    } catch (err) {
+      console.error("[scheduler] Automation failed:", err);
+    } finally {
+      automationRunning = false;
     }
   },
   {
     timezone: dailyRunTimezone,
-    noOverlap: true,
-  },
+  }
 );
 
 app.use((error, _req, res, _next) => {
