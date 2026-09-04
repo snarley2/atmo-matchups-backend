@@ -1871,14 +1871,24 @@ async function run() {
     recursive: true,
   });
 
+  const isRender = Boolean(process.env.RENDER);
+
   const browser = await puppeteer.launch({
-    headless: false,
-    executablePath: CHROME_PATH,
-    userDataDir: CHROME_USER_DATA_DIR,
-    defaultViewport: null,
+    headless: isRender ? true : false,
+  
+    ...(isRender ? {} : { executablePath: CHROME_PATH }),
+    ...(isRender ? {} : { userDataDir: CHROME_USER_DATA_DIR }),
+  
+    defaultViewport: isRender
+      ? { width: 1920, height: 1080 }
+      : null,
+  
     args: [
-      "--start-maximized",
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
       "--disable-notifications",
+      "--window-size=1920,1080",
     ],
   });
 
