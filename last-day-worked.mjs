@@ -1347,6 +1347,7 @@ async function run() {
   try {
     console.log("[chrome] launched");
 
+    const pages = await browser.pages();
     const page = pages[0] || await browser.newPage();
     
     page.setDefaultTimeout(30000);
