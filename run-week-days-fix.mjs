@@ -67,6 +67,238 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function redactSensitive(value) {
+  if (value == null) return value;
+
+  let text = String(value);
+
+  const secrets = [
+    process.env.WORKMYT_EMAIL,
+    process.env.WORKMYT_PASSWORD,
+  ].filter(Boolean);
+
+  for (const secret of secrets) {
+    text = text.split(secret).join("[REDACTED]");
+  }
+
+  // redact common sensitive JSON/form fields
+  text = text.replace(
+    /("(?:password|token|access_token|refresh_token|authorization|cookie|session|sessionid|api_key|apikey)"\s*:\s*)"[^"]*"/gi,
+    '$1"[REDACTED]"'
+  );
+
+  text = text.replace(
+    /((?:password|token|access_token|refresh_token|authorization|cookie|session|sessionid|api_key|apikey)=)[^&\s]+/gi,
+    "$1[REDACTED]"
+  );
+
+  return text;
+}
+
+function safeNetworkUrl(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+
+    const sensitiveKeys = [
+      "password",
+      "token",
+      "access_token",
+      "refresh_token",
+      "authorization",
+      "session",
+      "sessionid",
+      "api_key",
+      "apikey",
+    ];
+
+    for (const key of [...url.searchParams.keys()]) {
+      if (
+        sensitiveKeys.some((sensitive) =>
+          key.toLowerCase().includes(sensitive)
+        )
+      ) {
+        url.searchParams.set(key, "[REDACTED]");
+      }
+    }
+
+    return redactSensitive(url.toString());
+  } catch {
+    return redactSensitive(rawUrl);
+  }
+}
+
+function attachNetworkLogger(page, scriptName = "workmyt") {
+  console.log(
+    `[network:${scriptName}] FieldDay network discovery enabled`
+  );
+
+  page.on("request", (request) => {
+    try {
+      const type = request.resourceType();
+
+      if (type !== "xhr" && type !== "fetch") {
+        return;
+      }
+
+      const url = safeNetworkUrl(request.url());
+
+      console.log("");
+      console.log(
+        `========== NETWORK REQUEST [${scriptName}] ==========`
+      );
+      console.log("TYPE:", type);
+      console.log("METHOD:", request.method());
+      console.log("URL:", url);
+
+      const postData = request.postData();
+
+      if (postData) {
+        const safePostData = redactSensitive(postData);
+
+        console.log(
+          "POST DATA:",
+          safePostData.length > 10000
+            ? safePostData.slice(0, 10000) +
+                "... [TRUNCATED]"
+            : safePostData
+        );
+      }
+
+      console.log(
+        "===================================================="
+      );
+      console.log("");
+    } catch (error) {
+      console.log(
+        `[network:${scriptName}] request logger error:`,
+        error?.message || error
+      );
+    }
+  });
+
+  page.on("response", async (response) => {
+  try {
+    const request = response.request();
+    const type = request.resourceType();
+
+    if (type !== "xhr" && type !== "fetch") return;
+
+    const url = safeNetworkUrl(response.url());
+    const headers = response.headers();
+    const contentType = headers["content-type"] || "";
+
+    console.log("");
+    console.log(
+      `========== NETWORK RESPONSE [${scriptName}] ==========`
+    );
+    console.log("STATUS:", response.status());
+    console.log("TYPE:", type);
+    console.log("URL:", url);
+    console.log("CONTENT-TYPE:", contentType);
+
+    console.log(
+      "======================================================"
+    );
+    console.log("");
+  } catch (error) {
+    console.log(
+      `[network:${scriptName}] response logger error:`,
+      error?.message || error
+    );
+  }
+});
+
+page.on("requestfinished", async (request) => {
+  try {
+    const type = request.resourceType();
+
+    if (type !== "xhr" && type !== "fetch") return;
+
+    const response = request.response();
+    if (!response) return;
+
+    const url = safeNetworkUrl(request.url());
+    const headers = response.headers();
+    const contentType = headers["content-type"] || "";
+
+    const likelyReadable =
+      contentType.includes("json") ||
+      contentType.includes("text") ||
+      url.includes("/workflow/") ||
+      url.includes("/api/");
+
+    if (!likelyReadable) return;
+
+    console.log("");
+    console.log(
+      `========== NETWORK BODY [${scriptName}] ==========`
+    );
+    console.log("URL:", url);
+
+    try {
+      const bodyPromise = response.text();
+
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(
+          () => reject(new Error("body read timeout")),
+          15000
+        )
+      );
+
+      const rawBody = await Promise.race([
+        bodyPromise,
+        timeoutPromise,
+      ]);
+
+      const safeBody = redactSensitive(rawBody);
+
+      console.log(
+        "BODY:",
+        safeBody.length > 30000
+          ? safeBody.slice(0, 30000) +
+              "... [TRUNCATED]"
+          : safeBody
+      );
+    } catch (error) {
+      console.log(
+        "BODY: [could not read]",
+        error?.message || error
+      );
+    }
+
+    console.log(
+      "=================================================="
+    );
+    console.log("");
+  } catch (error) {
+    console.log(
+      `[network:${scriptName}] requestfinished logger error:`,
+      error?.message || error
+    );
+  }
+});
+
+page.on("requestfailed", (request) => {
+  const type = request.resourceType();
+
+  if (type !== "xhr" && type !== "fetch") return;
+
+  console.log("");
+  console.log(
+    `========== NETWORK FAILED [${scriptName}] ==========`
+  );
+  console.log("METHOD:", request.method());
+  console.log("URL:", safeNetworkUrl(request.url()));
+  console.log(
+    "ERROR:",
+    request.failure()?.errorText || "unknown"
+  );
+  console.log(
+    "===================================================="
+  );
+});
+}
+
 function calculateFlowRates(performance) {
   const talks =
     Number(performance.talk || 0);
@@ -254,31 +486,67 @@ async function loginIfNeeded(page) {
 
   await page.keyboard.press("Enter");
 
-  await page
-    .waitForFunction(
-      () => !document.querySelector('input[type="email"]'),
+  console.log("[login] submit sent to WorkMyT");
+
+  try {
+    await page.waitForFunction(
+      () => {
+        const email =
+          document.querySelector('input[type="email"]');
+
+        const password =
+          document.querySelector('input[type="password"]');
+
+        const text =
+          document.body?.innerText || "";
+
+        return (
+          (!email && !password) ||
+          text.includes("Daily") ||
+          text.includes("Campaign") ||
+          text.includes("Rep Name")
+        );
+      },
       {
         timeout: 30000,
+        polling: 500,
       }
-    )
-    .catch(async () => {
-      const info = await page.evaluate(() => ({
-        url: location.href,
-        title: document.title,
-        text: (document.body?.innerText || "").slice(0, 1000),
-      }));
+    );
 
-      console.log("[login] Login wait timed out.");
-      console.log("[login] URL:", info.url);
-      console.log("[login] title:", info.title);
-      console.log("[login] page text:", info.text);
+    console.log("[login] login page changed successfully");
+  } catch {
+    const info = await page.evaluate(() => ({
+      url: location.href,
+      title: document.title,
+      text: (document.body?.innerText || "")
+        .slice(0, 2000),
+      hasEmail: Boolean(
+        document.querySelector('input[type="email"]')
+      ),
+      hasPassword: Boolean(
+        document.querySelector('input[type="password"]')
+      ),
+    }));
 
-      throw new Error(
-        "WorkMyT login was submitted but the login page did not disappear."
-      );
-    });
+    console.log("[login] login wait timed out");
+    console.log("[login] URL:", info.url);
+    console.log("[login] title:", info.title);
+    console.log(
+      "[login] email field still visible:",
+      info.hasEmail
+    );
+    console.log(
+      "[login] password field still visible:",
+      info.hasPassword
+    );
+    console.log("[login] page text:", info.text);
 
-  console.log("[login] Login completed.");
+    throw new Error(
+      "WorkMyT login did not complete within 30 seconds."
+    );
+  }
+
+  console.log("[login] Login completed."););
 }
 
 function normalizeWhitespace(value) {
