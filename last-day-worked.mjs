@@ -70,6 +70,181 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// ============================================================
+// WORKMYT NETWORK DISCOVERY LOGGER
+// Temporary: helps us discover the API/XHR requests FieldDay uses
+// ============================================================
+
+function redactSensitive(value) {
+  if (value == null) return value;
+
+  let text = String(value);
+
+  const secrets = [
+    process.env.WORKMYT_EMAIL,
+    process.env.WORKMYT_PASSWORD,
+  ].filter(Boolean);
+
+  for (const secret of secrets) {
+    text = text.split(secret).join("[REDACTED]");
+  }
+
+  // redact common sensitive JSON/form fields
+  text = text.replace(
+    /("(?:password|token|access_token|refresh_token|authorization|cookie|session|sessionid|api_key|apikey)"\s*:\s*)"[^"]*"/gi,
+    '$1"[REDACTED]"'
+  );
+
+  text = text.replace(
+    /((?:password|token|access_token|refresh_token|authorization|cookie|session|sessionid|api_key|apikey)=)[^&\s]+/gi,
+    "$1[REDACTED]"
+  );
+
+  return text;
+}
+
+function safeNetworkUrl(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+
+    const sensitiveKeys = [
+      "password",
+      "token",
+      "access_token",
+      "refresh_token",
+      "authorization",
+      "session",
+      "sessionid",
+      "api_key",
+      "apikey",
+    ];
+
+    for (const key of [...url.searchParams.keys()]) {
+      if (
+        sensitiveKeys.some((sensitive) =>
+          key.toLowerCase().includes(sensitive)
+        )
+      ) {
+        url.searchParams.set(key, "[REDACTED]");
+      }
+    }
+
+    return redactSensitive(url.toString());
+  } catch {
+    return redactSensitive(rawUrl);
+  }
+}
+
+function attachNetworkLogger(page, scriptName = "workmyt") {
+  console.log(
+    `[network:${scriptName}] FieldDay network discovery enabled`
+  );
+
+  page.on("request", (request) => {
+    try {
+      const type = request.resourceType();
+
+      if (type !== "xhr" && type !== "fetch") {
+        return;
+      }
+
+      const url = safeNetworkUrl(request.url());
+
+      console.log("");
+      console.log(
+        `========== NETWORK REQUEST [${scriptName}] ==========`
+      );
+      console.log("TYPE:", type);
+      console.log("METHOD:", request.method());
+      console.log("URL:", url);
+
+      const postData = request.postData();
+
+      if (postData) {
+        const safePostData = redactSensitive(postData);
+
+        console.log(
+          "POST DATA:",
+          safePostData.length > 10000
+            ? safePostData.slice(0, 10000) +
+                "... [TRUNCATED]"
+            : safePostData
+        );
+      }
+
+      console.log(
+        "===================================================="
+      );
+      console.log("");
+    } catch (error) {
+      console.log(
+        `[network:${scriptName}] request logger error:`,
+        error?.message || error
+      );
+    }
+  });
+
+  page.on("response", async (response) => {
+    try {
+      const request = response.request();
+      const type = request.resourceType();
+
+      if (type !== "xhr" && type !== "fetch") {
+        return;
+      }
+
+      const url = safeNetworkUrl(response.url());
+      const headers = response.headers();
+      const contentType =
+        headers["content-type"] || "";
+
+      console.log("");
+      console.log(
+        `========== NETWORK RESPONSE [${scriptName}] ==========`
+      );
+      console.log("STATUS:", response.status());
+      console.log("TYPE:", type);
+      console.log("URL:", url);
+      console.log("CONTENT-TYPE:", contentType);
+
+      const likelyReadable =
+        contentType.includes("json") ||
+        contentType.includes("text") ||
+        contentType.includes("javascript");
+
+      if (likelyReadable) {
+        try {
+          const rawBody = await response.text();
+          const safeBody = redactSensitive(rawBody);
+
+          console.log(
+            "BODY:",
+            safeBody.length > 20000
+              ? safeBody.slice(0, 20000) +
+                  "... [TRUNCATED]"
+              : safeBody
+          );
+        } catch (bodyError) {
+          console.log(
+            "BODY: [unable to read]",
+            bodyError?.message || bodyError
+          );
+        }
+      }
+
+      console.log(
+        "======================================================"
+      );
+      console.log("");
+    } catch (error) {
+      console.log(
+        `[network:${scriptName}] response logger error:`,
+        error?.message || error
+      );
+    }
+  });
+}
+
 function calculateFlowRates(performance) {
   const talks =
     Number(performance.talk || 0);
@@ -1296,7 +1471,7 @@ async function run() {
   const isRender = Boolean(process.env.RENDER);
 
   const browser = await puppeteer.launch({
-    headless: false,
+    headless: isRender ? true : false,
   
     ...(isRender ? {} : { executablePath: CHROME_PATH }),
     ...(isRender ? {} : { userDataDir: CHROME_USER_DATA_DIR }),
@@ -1350,6 +1525,26 @@ async function run() {
     
     page.setDefaultTimeout(30000);
     page.setDefaultNavigationTimeout(60000);
+    
+    // Capture FieldDay's XHR/fetch requests before navigation/login
+    attachNetworkLogger(page, "last-day-worked");
+    
+    if (isRender) {
+      await page.setViewport({
+        width: 1920,
+        height: 1080,
+      });
+    
+      await page.setUserAgent(
+        "Mozilla/5.0 (X11; Linux x86_64) " +
+        "AppleWebKit/537.36 (KHTML, like Gecko) " +
+        "Chrome/151.0.0.0 Safari/537.36"
+      );
+    
+      console.log(
+        "[chrome] Render browser compatibility settings applied"
+      );
+    }
     
     if (isRender) {
       await page.setViewport({
