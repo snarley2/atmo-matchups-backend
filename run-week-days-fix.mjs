@@ -1924,10 +1924,13 @@ async function run() {
 
     const pages = await browser.pages();
     const page = pages[0] || await browser.newPage();
-
+    
     page.setDefaultTimeout(30000);
     page.setDefaultNavigationTimeout(60000);
-
+    
+    // Capture weekly FieldDay XHR/fetch traffic
+    attachNetworkLogger(page, "run-week-days-fix");
+    
     await waitForManualLogin(page);
 
    await page.bringToFront();
