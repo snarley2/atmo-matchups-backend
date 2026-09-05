@@ -185,64 +185,126 @@ function attachNetworkLogger(page, scriptName = "workmyt") {
   });
 
   page.on("response", async (response) => {
+  try {
+    const request = response.request();
+    const type = request.resourceType();
+
+    if (type !== "xhr" && type !== "fetch") return;
+
+    const url = safeNetworkUrl(response.url());
+    const headers = response.headers();
+    const contentType = headers["content-type"] || "";
+
+    console.log("");
+    console.log(
+      `========== NETWORK RESPONSE [${scriptName}] ==========`
+    );
+    console.log("STATUS:", response.status());
+    console.log("TYPE:", type);
+    console.log("URL:", url);
+    console.log("CONTENT-TYPE:", contentType);
+
+    console.log(
+      "======================================================"
+    );
+    console.log("");
+  } catch (error) {
+    console.log(
+      `[network:${scriptName}] response logger error:`,
+      error?.message || error
+    );
+  }
+});
+
+page.on("requestfinished", async (request) => {
+  try {
+    const type = request.resourceType();
+
+    if (type !== "xhr" && type !== "fetch") return;
+
+    const response = request.response();
+    if (!response) return;
+
+    const url = safeNetworkUrl(request.url());
+    const headers = response.headers();
+    const contentType = headers["content-type"] || "";
+
+    const likelyReadable =
+      contentType.includes("json") ||
+      contentType.includes("text") ||
+      url.includes("/workflow/") ||
+      url.includes("/api/");
+
+    if (!likelyReadable) return;
+
+    console.log("");
+    console.log(
+      `========== NETWORK BODY [${scriptName}] ==========`
+    );
+    console.log("URL:", url);
+
     try {
-      const request = response.request();
-      const type = request.resourceType();
+      const bodyPromise = response.text();
 
-      if (type !== "xhr" && type !== "fetch") {
-        return;
-      }
-
-      const url = safeNetworkUrl(response.url());
-      const headers = response.headers();
-      const contentType =
-        headers["content-type"] || "";
-
-      console.log("");
-      console.log(
-        `========== NETWORK RESPONSE [${scriptName}] ==========`
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(
+          () => reject(new Error("body read timeout")),
+          5000
+        )
       );
-      console.log("STATUS:", response.status());
-      console.log("TYPE:", type);
-      console.log("URL:", url);
-      console.log("CONTENT-TYPE:", contentType);
 
-      const likelyReadable =
-        contentType.includes("json") ||
-        contentType.includes("text") ||
-        contentType.includes("javascript");
+      const rawBody = await Promise.race([
+        bodyPromise,
+        timeoutPromise,
+      ]);
 
-      if (likelyReadable) {
-        try {
-          const rawBody = await response.text();
-          const safeBody = redactSensitive(rawBody);
-
-          console.log(
-            "BODY:",
-            safeBody.length > 20000
-              ? safeBody.slice(0, 20000) +
-                  "... [TRUNCATED]"
-              : safeBody
-          );
-        } catch (bodyError) {
-          console.log(
-            "BODY: [unable to read]",
-            bodyError?.message || bodyError
-          );
-        }
-      }
+      const safeBody = redactSensitive(rawBody);
 
       console.log(
-        "======================================================"
+        "BODY:",
+        safeBody.length > 30000
+          ? safeBody.slice(0, 30000) +
+              "... [TRUNCATED]"
+          : safeBody
       );
-      console.log("");
     } catch (error) {
       console.log(
-        `[network:${scriptName}] response logger error:`,
+        "BODY: [could not read]",
         error?.message || error
       );
     }
-  });
+
+    console.log(
+      "=================================================="
+    );
+    console.log("");
+  } catch (error) {
+    console.log(
+      `[network:${scriptName}] requestfinished logger error:`,
+      error?.message || error
+    );
+  }
+});
+
+page.on("requestfailed", (request) => {
+  const type = request.resourceType();
+
+  if (type !== "xhr" && type !== "fetch") return;
+
+  console.log("");
+  console.log(
+    `========== NETWORK FAILED [${scriptName}] ==========`
+  );
+  console.log("METHOD:", request.method());
+  console.log("URL:", safeNetworkUrl(request.url()));
+  console.log(
+    "ERROR:",
+    request.failure()?.errorText || "unknown"
+  );
+  console.log(
+    "===================================================="
+  );
+});
 }
 
 function calculateFlowRates(performance) {
@@ -431,6 +493,37 @@ async function loginIfNeeded(page) {
   console.log("[login] credentials entered; submitting");
 
   await page.keyboard.press("Enter");
+
+  console.log("[login] submit sent to WorkMyT");
+  
+  await new Promise((resolve) => setTimeout(resolve, 3000));
+  
+  const afterSubmit = await page.evaluate(() => ({
+    url: location.href,
+    title: document.title,
+    hasEmail: Boolean(
+      document.querySelector('input[type="email"]')
+    ),
+    hasPassword: Boolean(
+      document.querySelector('input[type="password"]')
+    ),
+    text: (document.body?.innerText || "").slice(0, 1500),
+  }));
+  
+  console.log("[login] after-submit URL:", afterSubmit.url);
+  console.log("[login] after-submit title:", afterSubmit.title);
+  console.log(
+    "[login] email field still visible:",
+    afterSubmit.hasEmail
+  );
+  console.log(
+    "[login] password field still visible:",
+    afterSubmit.hasPassword
+  );
+  console.log(
+    "[login] after-submit page text:",
+    afterSubmit.text
+  );
 
   await page
     .waitForFunction(
