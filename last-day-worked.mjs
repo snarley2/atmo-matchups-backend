@@ -249,7 +249,7 @@ page.on("requestfinished", async (request) => {
       const timeoutPromise = new Promise((_, reject) =>
         setTimeout(
           () => reject(new Error("body read timeout")),
-          5000
+          15000
         )
       );
 
@@ -494,60 +494,70 @@ async function loginIfNeeded(page) {
 
   await page.keyboard.press("Enter");
 
-  console.log("[login] submit sent to WorkMyT");
-  
-  await new Promise((resolve) => setTimeout(resolve, 3000));
-  
-  const afterSubmit = await page.evaluate(() => ({
-    url: location.href,
-    title: document.title,
-    hasEmail: Boolean(
-      document.querySelector('input[type="email"]')
-    ),
-    hasPassword: Boolean(
-      document.querySelector('input[type="password"]')
-    ),
-    text: (document.body?.innerText || "").slice(0, 1500),
-  }));
-  
-  console.log("[login] after-submit URL:", afterSubmit.url);
-  console.log("[login] after-submit title:", afterSubmit.title);
-  console.log(
-    "[login] email field still visible:",
-    afterSubmit.hasEmail
-  );
-  console.log(
-    "[login] password field still visible:",
-    afterSubmit.hasPassword
-  );
-  console.log(
-    "[login] after-submit page text:",
-    afterSubmit.text
-  );
+    console.log("[login] submit sent to WorkMyT");
 
-  await page
-    .waitForFunction(
-      () => !document.querySelector('input[type="email"]'),
+  try {
+    await page.waitForFunction(
+      () => {
+        const email =
+          document.querySelector('input[type="email"]');
+
+        const password =
+          document.querySelector('input[type="password"]');
+
+        const text =
+          document.body?.innerText || "";
+
+        return (
+          (!email && !password) ||
+          text.includes("Daily") ||
+          text.includes("Campaign") ||
+          text.includes("Rep Name")
+        );
+      },
       {
         timeout: 30000,
+        polling: 500,
       }
-    )
-    .catch(async () => {
-      const info = await page.evaluate(() => ({
-        url: location.href,
-        title: document.title,
-        text: (document.body?.innerText || "").slice(0, 1000),
-      }));
+    );
 
-      console.log("[login] Login wait timed out.");
-      console.log("[login] URL:", info.url);
-      console.log("[login] title:", info.title);
-      console.log("[login] page text:", info.text);
+    console.log("[login] login page changed successfully");
+  } catch {
+    const info = await page.evaluate(() => ({
+      url: location.href,
+      title: document.title,
+      text: (document.body?.innerText || "")
+        .slice(0, 2000),
 
-      throw new Error(
-        "WorkMyT login was submitted but the login page did not disappear."
-      );
-    });
+      hasEmail: Boolean(
+        document.querySelector('input[type="email"]')
+      ),
+
+      hasPassword: Boolean(
+        document.querySelector('input[type="password"]')
+      ),
+    }));
+
+    console.log("[login] login wait timed out");
+    console.log("[login] URL:", info.url);
+    console.log("[login] title:", info.title);
+
+    console.log(
+      "[login] email field still visible:",
+      info.hasEmail
+    );
+
+    console.log(
+      "[login] password field still visible:",
+      info.hasPassword
+    );
+
+    console.log("[login] page text:", info.text);
+
+    throw new Error(
+      "WorkMyT login did not complete within 30 seconds."
+    );
+  }
 
   console.log("[login] Login completed.");
 }
