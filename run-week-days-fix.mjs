@@ -184,43 +184,99 @@ async function loginIfNeeded(page) {
   const emailSelector = 'input[type="email"]';
   const passwordSelector = 'input[type="password"]';
 
-  const loginPageVisible = await page
-    .waitForSelector(emailSelector, {
-      visible: true,
-      timeout: 3000,
-    })
-    .then(() => true)
-    .catch(() => false);
+  const email = process.env.WORKMYT_EMAIL;
+  const password = process.env.WORKMYT_PASSWORD;
 
-  if (!loginPageVisible) {
-    console.log("[login] Already logged in.");
-    return;
-  }
-
-  console.log("[login] Login page detected.");
-
-  await page.click(emailSelector, { clickCount: 3 });
-  await page.type(emailSelector, process.env.WORKMYT_EMAIL, {
-    delay: 30,
-  });
-
-  await page.click(passwordSelector, { clickCount: 3 });
-  await page.type(passwordSelector, process.env.WORKMYT_PASSWORD, {
-    delay: 30,
-  });
   if (!email || !password) {
     throw new Error(
       "WORKMYT_EMAIL or WORKMYT_PASSWORD environment variable is missing."
     );
   }
+
+  console.log("[login] checking current page...");
+  console.log("[login] current URL:", page.url());
+
+  const loginPageVisible = await page
+    .waitForSelector(emailSelector, {
+      visible: true,
+      timeout: 10000,
+    })
+    .then(() => true)
+    .catch(() => false);
+
+  if (!loginPageVisible) {
+    console.log("[login] Email field not detected.");
+
+    const pageInfo = await page.evaluate(() => ({
+      url: location.href,
+      title: document.title,
+      text: (document.body?.innerText || "").slice(0, 1000),
+    }));
+
+    console.log("[login] page URL:", pageInfo.url);
+    console.log("[login] page title:", pageInfo.title);
+    console.log("[login] page text:", pageInfo.text);
+
+    const alreadyLoggedIn =
+      pageInfo.text.includes("Daily") ||
+      pageInfo.text.includes("Campaign") ||
+      pageInfo.text.includes("Rep Name");
+
+    if (alreadyLoggedIn) {
+      console.log("[login] Already logged in.");
+      return;
+    }
+
+    throw new Error(
+      "WorkMyT login form was not found and FieldDay was not detected."
+    );
+  }
+
+  console.log("[login] Login page detected.");
+
+  await page.click(emailSelector, {
+    clickCount: 3,
+  });
+
+  await page.type(emailSelector, email, {
+    delay: 30,
+  });
+
+  await page.click(passwordSelector, {
+    clickCount: 3,
+  });
+
+  await page.type(passwordSelector, password, {
+    delay: 30,
+  });
+
+  console.log("[login] credentials entered; submitting");
+
   await page.keyboard.press("Enter");
 
-  await page.waitForFunction(
-    () => !document.querySelector('input[type="email"]'),
-    {
-      timeout: 30000,
-    }
-  );
+  await page
+    .waitForFunction(
+      () => !document.querySelector('input[type="email"]'),
+      {
+        timeout: 30000,
+      }
+    )
+    .catch(async () => {
+      const info = await page.evaluate(() => ({
+        url: location.href,
+        title: document.title,
+        text: (document.body?.innerText || "").slice(0, 1000),
+      }));
+
+      console.log("[login] Login wait timed out.");
+      console.log("[login] URL:", info.url);
+      console.log("[login] title:", info.title);
+      console.log("[login] page text:", info.text);
+
+      throw new Error(
+        "WorkMyT login was submitted but the login page did not disappear."
+      );
+    });
 
   console.log("[login] Login completed.");
 }
@@ -947,12 +1003,37 @@ async function waitForManualLogin(page) {
   console.log("[auth] opening WorkMyT");
   console.log("[auth] log in manually in the Chrome window");
   console.log("[auth] the script will click the assessment icon after login");
-
-  await page.goto(FIELD_DAY_URL, {
-    waitUntil: "domcontentloaded",
-  });
-
+  
+  console.log("[auth] navigating to:", FIELD_DAY_URL);
+  
+  try {
+    const response = await page.goto(FIELD_DAY_URL, {
+      waitUntil: "domcontentloaded",
+      timeout: 30000,
+    });
+  
+    console.log(
+      "[auth] navigation response:",
+      response ? response.status() : "no response"
+    );
+  } catch (error) {
+    console.log(
+      "[auth] page.goto did not finish normally:",
+      error.message
+    );
+  
+    console.log(
+      "[auth] continuing with currently loaded page:",
+      page.url()
+    );
+  }
+  
+  console.log("[auth] page navigation stage finished");
+  console.log("[auth] current URL:", page.url());
+  
   await loginIfNeeded(page);
+  
+  console.log("[auth] loginIfNeeded finished");
 
   await page.waitForFunction(
     () => {
@@ -979,7 +1060,7 @@ async function waitForManualLogin(page) {
       return alreadyOnFieldDay || Boolean(assessmentButton);
     },
     {
-      timeout: 0,
+      timeout: 60000,
     }
   );
 
