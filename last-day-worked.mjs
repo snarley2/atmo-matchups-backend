@@ -135,12 +135,26 @@ function safeNetworkUrl(rawUrl) {
   }
 }
 
+function shouldSkipNetworkLog(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+
+    return (
+      url.pathname === "/user/m" ||
+      url.pathname === "/user/apm"
+    );
+  } catch {
+    return false;
+  }
+}
+
 function attachNetworkLogger(page, scriptName = "workmyt") {
   console.log(
     `[network:${scriptName}] FieldDay network discovery enabled`
   );
 
   page.on("request", (request) => {
+    if (shouldSkipNetworkLog(request.url())) return;
     try {
       const type = request.resourceType();
 
@@ -185,6 +199,7 @@ function attachNetworkLogger(page, scriptName = "workmyt") {
   });
 
   page.on("response", async (response) => {
+    if (shouldSkipNetworkLog(request.url())) return;
   try {
     const request = response.request();
     const type = request.resourceType();
@@ -217,6 +232,7 @@ function attachNetworkLogger(page, scriptName = "workmyt") {
 });
 
 page.on("requestfinished", async (request) => {
+  if (shouldSkipNetworkLog(request.url())) return;
   try {
     const type = request.resourceType();
 
@@ -287,6 +303,7 @@ page.on("requestfinished", async (request) => {
 });
 
 page.on("requestfailed", (request) => {
+  if (shouldSkipNetworkLog(request.url())) return;
   const type = request.resourceType();
 
   if (type !== "xhr" && type !== "fetch") return;
