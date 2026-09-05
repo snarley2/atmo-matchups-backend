@@ -154,11 +154,14 @@ function attachNetworkLogger(page, scriptName = "workmyt") {
   );
 
   page.on("request", (request) => {
-    if (shouldSkipNetworkLog(request.url())) return;
     try {
       const type = request.resourceType();
 
       if (type !== "xhr" && type !== "fetch") {
+        return;
+      }
+
+      if (shouldSkipNetworkLog(request.url())) {
         return;
       }
 
@@ -199,129 +202,170 @@ function attachNetworkLogger(page, scriptName = "workmyt") {
   });
 
   page.on("response", async (response) => {
-    if (shouldSkipNetworkLog(request.url())) return;
-  try {
-    const request = response.request();
-    const type = request.resourceType();
-
-    if (type !== "xhr" && type !== "fetch") return;
-
-    const url = safeNetworkUrl(response.url());
-    const headers = response.headers();
-    const contentType = headers["content-type"] || "";
-
-    console.log("");
-    console.log(
-      `========== NETWORK RESPONSE [${scriptName}] ==========`
-    );
-    console.log("STATUS:", response.status());
-    console.log("TYPE:", type);
-    console.log("URL:", url);
-    console.log("CONTENT-TYPE:", contentType);
-
-    console.log(
-      "======================================================"
-    );
-    console.log("");
-  } catch (error) {
-    console.log(
-      `[network:${scriptName}] response logger error:`,
-      error?.message || error
-    );
-  }
-});
-
-page.on("requestfinished", async (request) => {
-  if (shouldSkipNetworkLog(request.url())) return;
-  try {
-    const type = request.resourceType();
-
-    if (type !== "xhr" && type !== "fetch") return;
-
-    const response = request.response();
-    if (!response) return;
-
-    const url = safeNetworkUrl(request.url());
-    const headers = response.headers();
-    const contentType = headers["content-type"] || "";
-
-    const likelyReadable =
-      contentType.includes("json") ||
-      contentType.includes("text") ||
-      url.includes("/workflow/") ||
-      url.includes("/api/");
-
-    if (!likelyReadable) return;
-
-    console.log("");
-    console.log(
-      `========== NETWORK BODY [${scriptName}] ==========`
-    );
-    console.log("URL:", url);
-
     try {
-      const bodyPromise = response.text();
+      if (shouldSkipNetworkLog(response.url())) {
+        return;
+      }
 
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(
-          () => reject(new Error("body read timeout")),
-          15000
-        )
+      const request = response.request();
+      const type = request.resourceType();
+
+      if (type !== "xhr" && type !== "fetch") {
+        return;
+      }
+
+      const url = safeNetworkUrl(response.url());
+
+      const headers = response.headers();
+      const contentType =
+        headers["content-type"] || "";
+
+      console.log("");
+      console.log(
+        `========== NETWORK RESPONSE [${scriptName}] ==========`
       );
-
-      const rawBody = await Promise.race([
-        bodyPromise,
-        timeoutPromise,
-      ]);
-
-      const safeBody = redactSensitive(rawBody);
+      console.log("STATUS:", response.status());
+      console.log("TYPE:", type);
+      console.log("URL:", url);
+      console.log("CONTENT-TYPE:", contentType);
 
       console.log(
-        "BODY:",
-        safeBody.length > 30000
-          ? safeBody.slice(0, 30000) +
-              "... [TRUNCATED]"
-          : safeBody
+        "======================================================"
       );
+      console.log("");
     } catch (error) {
       console.log(
-        "BODY: [could not read]",
+        `[network:${scriptName}] response logger error:`,
         error?.message || error
       );
     }
+  });
 
-    console.log(
-      "=================================================="
-    );
-    console.log("");
-  } catch (error) {
-    console.log(
-      `[network:${scriptName}] requestfinished logger error:`,
-      error?.message || error
-    );
-  }
-});
+  page.on("requestfinished", async (request) => {
+    try {
+      const type = request.resourceType();
 
-page.on("requestfailed", (request) => {
-  if (shouldSkipNetworkLog(request.url())) return;
-  const type = request.resourceType();
+      if (type !== "xhr" && type !== "fetch") {
+        return;
+      }
 
-  if (type !== "xhr" && type !== "fetch") return;
+      if (shouldSkipNetworkLog(request.url())) {
+        return;
+      }
 
-  console.log("");
-  console.log(
-    `========== NETWORK FAILED [${scriptName}] ==========`
-  );
-  console.log("METHOD:", request.method());
-  console.log("URL:", safeNetworkUrl(request.url()));
-  console.log(
-    "ERROR:",
-    request.failure()?.errorText || "unknown"
-  );
-  console.log(
-    "===================================================="
-  );
-});
+      const response = request.response();
+
+      if (!response) {
+        return;
+      }
+
+      const url = safeNetworkUrl(request.url());
+
+      const headers = response.headers();
+      const contentType =
+        headers["content-type"] || "";
+
+      const likelyReadable =
+        contentType.includes("json") ||
+        contentType.includes("text") ||
+        url.includes("/workflow/") ||
+        url.includes("/api/");
+
+      if (!likelyReadable) {
+        return;
+      }
+
+      console.log("");
+      console.log(
+        `========== NETWORK BODY [${scriptName}] ==========`
+      );
+      console.log("URL:", url);
+
+      try {
+        const bodyPromise = response.text();
+
+        const timeoutPromise = new Promise(
+          (_, reject) =>
+            setTimeout(
+              () =>
+                reject(
+                  new Error("body read timeout")
+                ),
+              15000
+            )
+        );
+
+        const rawBody = await Promise.race([
+          bodyPromise,
+          timeoutPromise,
+        ]);
+
+        const safeBody =
+          redactSensitive(rawBody);
+
+        console.log(
+          "BODY:",
+          safeBody.length > 30000
+            ? safeBody.slice(0, 30000) +
+                "... [TRUNCATED]"
+            : safeBody
+        );
+      } catch (error) {
+        console.log(
+          "BODY: [could not read]",
+          error?.message || error
+        );
+      }
+
+      console.log(
+        "=================================================="
+      );
+      console.log("");
+    } catch (error) {
+      console.log(
+        `[network:${scriptName}] requestfinished logger error:`,
+        error?.message || error
+      );
+    }
+  });
+
+  page.on("requestfailed", (request) => {
+    try {
+      const type = request.resourceType();
+
+      if (type !== "xhr" && type !== "fetch") {
+        return;
+      }
+
+      if (shouldSkipNetworkLog(request.url())) {
+        return;
+      }
+
+      console.log("");
+      console.log(
+        `========== NETWORK FAILED [${scriptName}] ==========`
+      );
+      console.log("METHOD:", request.method());
+      console.log(
+        "URL:",
+        safeNetworkUrl(request.url())
+      );
+      console.log(
+        "ERROR:",
+        request.failure()?.errorText ||
+          "unknown"
+      );
+
+      console.log(
+        "===================================================="
+      );
+    } catch (error) {
+      console.log(
+        `[network:${scriptName}] requestfailed logger error:`,
+        error?.message || error
+      );
+    }
+  });
 }
 
 function calculateFlowRates(performance) {
