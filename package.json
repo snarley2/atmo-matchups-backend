@@ -5,6 +5,8 @@
   "scripts": {
     "server": "node server/index.mjs",
     "dev:server": "node --watch server/index.mjs",
+    "automation": "node automation/index.mjs",
+    "automation:once": "node run.mjs",
     "run": "node run.mjs",
     "run:last-worked": "node last-day-worked.mjs",
     "generate:gaps": "node generate-team-rep-gaps.mjs",

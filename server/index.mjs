@@ -4,10 +4,8 @@ import { createServer } from "node:http";
 import { Server as SocketIOServer } from "socket.io";
 import cors from "cors";
 import crypto from "node:crypto";
-import cron from "node-cron";
 import { getAgents, replaceAgents, getGaps, getPerformanceTabs, saveMatchups, getDraftMatchups, saveDraftMatchups, getFinalMatchups, getFieldNotes, addFieldNote, getManualNumbers, upsertManualNumbers, getSuggestions, addSuggestion, getNumbersTracking } from "./sheets.mjs";
 import { combineAgentsAndGaps, generateGroups } from "./logic.mjs";
-import { runDailyAutomation, isDailyAutomationRunning } from "../run.mjs";
 
 const app = express();
 
@@ -207,7 +205,6 @@ app.get("/api/health", (_req, res) => {
   res.json({
     ok: true,
     status: "online",
-    automationRunning: isDailyAutomationRunning(),
     serverTime: new Date().toISOString(),
   });
 });
@@ -531,96 +528,8 @@ app.post("/api/field-notes", requireAdmin, async (req, res, next) => {
   }
 });
 
-function requireApiKey(req, res, next) {
-  const expected = process.env.API_SECRET_KEY;
-  if (!expected) return res.status(503).json({ error: "API_SECRET_KEY is not configured" });
-
-  const received = req.get("X-API-Key") || req.get("Authorization")?.replace(/^Bearer\s+/i, "");
-  if (!received) return res.status(401).json({ error: "Missing API key" });
-
-  const expectedBuffer = Buffer.from(expected);
-  const receivedBuffer = Buffer.from(received);
-  const valid =
-    expectedBuffer.length === receivedBuffer.length &&
-    crypto.timingSafeEqual(expectedBuffer, receivedBuffer);
-
-  if (!valid) return res.status(403).json({ error: "Invalid API key" });
-  next();
-}
-
-app.post("/api/automation/run", requireApiKey, async (_req, res, next) => {
-  if (isDailyAutomationRunning()) {
-    return res.status(409).json({ error: "Automation is already running" });
-  }
-
-  try {
-    res.json(await runDailyAutomation());
-  } catch (error) { next(error); }
-});
-
-let automationRunning = false;
-
-const dailyRunCron = process.env.DAILY_RUN_CRON || "* * * * *";
-const dailyRunTimezone =
-  process.env.DAILY_RUN_TIMEZONE || "America/New_York";
-
-console.log("==================================================");
-console.log("[scheduler] Scheduler initializing");
-console.log(`[scheduler] Cron: ${dailyRunCron}`);
-console.log(`[scheduler] Timezone: ${dailyRunTimezone}`);
-console.log(`[scheduler] Server time: ${new Date().toISOString()}`);
-console.log("==================================================");
-
-cron.schedule(
-  dailyRunCron,
-  async () => {
-    const triggerTime = new Date();
-
-    console.log("");
-    console.log("==================================================");
-    console.log("[scheduler] ⏰ TRIGGER FIRED");
-    console.log(`[scheduler] Trigger time: ${triggerTime.toISOString()}`);
-    console.log(`[scheduler] automationRunning: ${automationRunning}`);
-    console.log(
-      `[scheduler] run.mjs reports running: ${isDailyAutomationRunning()}`
-    );
-    console.log("==================================================");
-
-    if (automationRunning || isDailyAutomationRunning()) {
-      console.log(
-        "[scheduler] ⏭️ SKIPPED - previous automation is still running."
-      );
-      return;
-    }
-
-    automationRunning = true;
-
-    try {
-      console.log("[scheduler] ▶️ Calling runDailyAutomation()...");
-
-      const result = await runDailyAutomation();
-
-      console.log("[scheduler] ✅ runDailyAutomation() resolved");
-      console.log("[scheduler] Result:", result);
-    } catch (err) {
-      console.error("[scheduler] ❌ AUTOMATION FAILED");
-      console.error("[scheduler] Error message:", err?.message);
-      console.error("[scheduler] Full error:", err);
-    } finally {
-      automationRunning = false;
-
-      console.log(
-        `[scheduler] 🏁 Trigger complete at ${new Date().toISOString()}`
-      );
-      console.log("[scheduler] Ready for next trigger.");
-      console.log("==================================================");
-      console.log("");
-    }
-  },
-  {
-    timezone: dailyRunTimezone,
-  }
-);
+// Browser automation intentionally runs in a separate Render service.
+// This web server only serves the ATMO API / Socket.IO application.
 
 app.use((error, _req, res, _next) => {
   console.error(error);
@@ -629,17 +538,6 @@ app.use((error, _req, res, _next) => {
 });
 
 httpServer.listen(port, "0.0.0.0", () => {
-  console.log("");
-  console.log("==================================================");
-  console.log("[server] ✅ ATMO BACKEND IS RUNNING");
-  console.log(`[server] Port: ${port}`);
-  console.log(`[server] Started: ${new Date().toISOString()}`);
-  console.log(`[server] Node version: ${process.version}`);
-  console.log(`[server] PID: ${process.pid}`);
+  console.log(`[server] ATMO API running at http://localhost:${port}`);
   console.log(`[server] Allowed origins: ${allowedOrigins.join(", ")}`);
-  console.log(`[scheduler] Cron: ${dailyRunCron}`);
-  console.log(`[scheduler] Timezone: ${dailyRunTimezone}`);
-  console.log("[scheduler] Waiting for next trigger...");
-  console.log("==================================================");
-  console.log("");
 });

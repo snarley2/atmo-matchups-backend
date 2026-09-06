@@ -70,301 +70,6 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// ============================================================
-// WORKMYT NETWORK DISCOVERY LOGGER
-// Temporary: helps us discover the API/XHR requests FieldDay uses
-// ============================================================
-
-function redactSensitive(value) {
-  if (value == null) return value;
-
-  let text = String(value);
-
-  const secrets = [
-    process.env.WORKMYT_EMAIL,
-    process.env.WORKMYT_PASSWORD,
-  ].filter(Boolean);
-
-  for (const secret of secrets) {
-    text = text.split(secret).join("[REDACTED]");
-  }
-
-  // redact common sensitive JSON/form fields
-  text = text.replace(
-    /("(?:password|token|access_token|refresh_token|authorization|cookie|session|sessionid|api_key|apikey)"\s*:\s*)"[^"]*"/gi,
-    '$1"[REDACTED]"'
-  );
-
-  text = text.replace(
-    /((?:password|token|access_token|refresh_token|authorization|cookie|session|sessionid|api_key|apikey)=)[^&\s]+/gi,
-    "$1[REDACTED]"
-  );
-
-  return text;
-}
-
-function safeNetworkUrl(rawUrl) {
-  try {
-    const url = new URL(rawUrl);
-
-    const sensitiveKeys = [
-      "password",
-      "token",
-      "access_token",
-      "refresh_token",
-      "authorization",
-      "session",
-      "sessionid",
-      "api_key",
-      "apikey",
-    ];
-
-    for (const key of [...url.searchParams.keys()]) {
-      if (
-        sensitiveKeys.some((sensitive) =>
-          key.toLowerCase().includes(sensitive)
-        )
-      ) {
-        url.searchParams.set(key, "[REDACTED]");
-      }
-    }
-
-    return redactSensitive(url.toString());
-  } catch {
-    return redactSensitive(rawUrl);
-  }
-}
-
-function shouldSkipNetworkLog(rawUrl) {
-  try {
-    const url = new URL(rawUrl);
-
-    return (
-      url.pathname === "/user/m" ||
-      url.pathname === "/user/apm"
-    );
-  } catch {
-    return false;
-  }
-}
-
-function attachNetworkLogger(page, scriptName = "workmyt") {
-  console.log(
-    `[network:${scriptName}] FieldDay network discovery enabled`
-  );
-
-  page.on("request", (request) => {
-    try {
-      const type = request.resourceType();
-
-      if (type !== "xhr" && type !== "fetch") {
-        return;
-      }
-
-      if (shouldSkipNetworkLog(request.url())) {
-        return;
-      }
-
-      const url = safeNetworkUrl(request.url());
-
-      console.log("");
-      console.log(
-        `========== NETWORK REQUEST [${scriptName}] ==========`
-      );
-      console.log("TYPE:", type);
-      console.log("METHOD:", request.method());
-      console.log("URL:", url);
-
-      const postData = request.postData();
-
-      if (postData) {
-        const safePostData = redactSensitive(postData);
-
-        console.log(
-          "POST DATA:",
-          safePostData.length > 10000
-            ? safePostData.slice(0, 10000) +
-                "... [TRUNCATED]"
-            : safePostData
-        );
-      }
-
-      console.log(
-        "===================================================="
-      );
-      console.log("");
-    } catch (error) {
-      console.log(
-        `[network:${scriptName}] request logger error:`,
-        error?.message || error
-      );
-    }
-  });
-
-  page.on("response", async (response) => {
-    if (shouldSkipNetworkLog(response.url())) return;
-  
-    try {
-      const request = response.request();
-      const type = request.resourceType();
-  
-      if (type !== "xhr" && type !== "fetch") {
-        return;
-      }
-  
-      const url = safeNetworkUrl(response.url());
-      const headers = response.headers();
-      const contentType =
-        headers["content-type"] || "";
-  
-      console.log("");
-      console.log(
-        `========== NETWORK RESPONSE [${scriptName}] ==========`
-      );
-      console.log("STATUS:", response.status());
-      console.log("TYPE:", type);
-      console.log("URL:", url);
-      console.log("CONTENT-TYPE:", contentType);
-  
-      console.log(
-        "======================================================"
-      );
-      console.log("");
-    } catch (error) {
-      console.log(
-        `[network:${scriptName}] response logger error:`,
-        error?.message || error
-      );
-    }
-  });
-
-  page.on("requestfinished", async (request) => {
-    try {
-      const type = request.resourceType();
-
-      if (type !== "xhr" && type !== "fetch") {
-        return;
-      }
-
-      if (shouldSkipNetworkLog(request.url())) {
-        return;
-      }
-
-      const response = request.response();
-
-      if (!response) {
-        return;
-      }
-
-      const url = safeNetworkUrl(request.url());
-
-      const headers = response.headers();
-      const contentType =
-        headers["content-type"] || "";
-
-      const likelyReadable =
-        contentType.includes("json") ||
-        contentType.includes("text") ||
-        url.includes("/workflow/") ||
-        url.includes("/api/");
-
-      if (!likelyReadable) {
-        return;
-      }
-
-      console.log("");
-      console.log(
-        `========== NETWORK BODY [${scriptName}] ==========`
-      );
-      console.log("URL:", url);
-
-      try {
-        const bodyPromise = response.text();
-
-        const timeoutPromise = new Promise(
-          (_, reject) =>
-            setTimeout(
-              () =>
-                reject(
-                  new Error("body read timeout")
-                ),
-              15000
-            )
-        );
-
-        const rawBody = await Promise.race([
-          bodyPromise,
-          timeoutPromise,
-        ]);
-
-        const safeBody =
-          redactSensitive(rawBody);
-
-        console.log(
-          "BODY:",
-          safeBody.length > 30000
-            ? safeBody.slice(0, 30000) +
-                "... [TRUNCATED]"
-            : safeBody
-        );
-      } catch (error) {
-        console.log(
-          "BODY: [could not read]",
-          error?.message || error
-        );
-      }
-
-      console.log(
-        "=================================================="
-      );
-      console.log("");
-    } catch (error) {
-      console.log(
-        `[network:${scriptName}] requestfinished logger error:`,
-        error?.message || error
-      );
-    }
-  });
-
-  page.on("requestfailed", (request) => {
-    try {
-      const type = request.resourceType();
-
-      if (type !== "xhr" && type !== "fetch") {
-        return;
-      }
-
-      if (shouldSkipNetworkLog(request.url())) {
-        return;
-      }
-
-      console.log("");
-      console.log(
-        `========== NETWORK FAILED [${scriptName}] ==========`
-      );
-      console.log("METHOD:", request.method());
-      console.log(
-        "URL:",
-        safeNetworkUrl(request.url())
-      );
-      console.log(
-        "ERROR:",
-        request.failure()?.errorText ||
-          "unknown"
-      );
-
-      console.log(
-        "===================================================="
-      );
-    } catch (error) {
-      console.log(
-        `[network:${scriptName}] requestfailed logger error:`,
-        error?.message || error
-      );
-    }
-  });
-}
-
 function calculateFlowRates(performance) {
   const talks =
     Number(performance.talk || 0);
@@ -482,240 +187,47 @@ async function loginIfNeeded(page) {
   const emailSelector = 'input[type="email"]';
   const passwordSelector = 'input[type="password"]';
 
-  const email = process.env.WORKMYT_EMAIL;
-  const password = process.env.WORKMYT_PASSWORD;
-
-  if (!email || !password) {
-    throw new Error(
-      "WORKMYT_EMAIL or WORKMYT_PASSWORD environment variable is missing."
-    );
-  }
-
-  console.log("[login] checking current page...");
-  console.log("[login] current URL:", page.url());
-
   const loginPageVisible = await page
     .waitForSelector(emailSelector, {
       visible: true,
-      timeout: 10000,
+      timeout: 3000,
     })
     .then(() => true)
     .catch(() => false);
 
   if (!loginPageVisible) {
-    console.log("[login] Email field not detected.");
-
-    const pageInfo = await page.evaluate(() => ({
-      url: location.href,
-      title: document.title,
-      text: (document.body?.innerText || "").slice(0, 1000),
-    }));
-
-    console.log("[login] page URL:", pageInfo.url);
-    console.log("[login] page title:", pageInfo.title);
-    console.log("[login] page text:", pageInfo.text);
-
-    const alreadyLoggedIn =
-      pageInfo.text.includes("Daily") ||
-      pageInfo.text.includes("Campaign") ||
-      pageInfo.text.includes("Rep Name");
-
-    if (alreadyLoggedIn) {
-      console.log("[login] Already logged in.");
-      return;
-    }
-
-    throw new Error(
-      "WorkMyT login form was not found and FieldDay was not detected."
-    );
+    console.log("[login] Already logged in.");
+    return;
   }
 
   console.log("[login] Login page detected.");
 
-  await page.click(emailSelector, {
-    clickCount: 3,
-  });
-
-  await page.type(emailSelector, email, {
+  await page.click(emailSelector, { clickCount: 3 });
+  await page.type(emailSelector, process.env.WORKMYT_EMAIL, {
     delay: 30,
   });
 
-  await page.click(passwordSelector, {
-    clickCount: 3,
-  });
-
-  await page.type(passwordSelector, password, {
+  await page.click(passwordSelector, { clickCount: 3 });
+  await page.type(passwordSelector, process.env.WORKMYT_PASSWORD, {
     delay: 30,
   });
+  if (!email || !password) {
+    throw new Error(
+      "WORKMYT_EMAIL or WORKMYT_PASSWORD environment variable is missing."
+    );
+  }
+  await page.keyboard.press("Enter");
 
- console.log("[login] credentials entered; submitting");
-
-  const workflowResponsePromise = page.waitForResponse(
-    (response) =>
-      response.url().includes("/workflow/start") &&
-      response.request().method() === "POST",
+  await page.waitForFunction(
+    () => !document.querySelector('input[type="email"]'),
     {
       timeout: 30000,
     }
   );
-  
-  await page.keyboard.press("Enter");
-  
-  console.log("[login] submit sent to WorkMyT");
-  
-  const workflowResponse =
-    await workflowResponsePromise;
-  
-  console.log(
-    "[login] workflow response status:",
-    workflowResponse.status()
-  );
 
-  
-  console.log(
-  "[login] workflow returned; waiting for auth state"
-);
-
-try {
-  await page.waitForFunction(
-    () => {
-      const email =
-        document.querySelector(
-          'input[type="email"]'
-        );
-
-      const password =
-        document.querySelector(
-          'input[type="password"]'
-        );
-
-      const text =
-        document.body?.innerText || "";
-
-      const url = location.href;
-
-      const loginInputsGone =
-        !email && !password;
-
-      const fieldDayText =
-        text.includes("Daily") ||
-        text.includes("Campaign") ||
-        text.includes("Rep Name") ||
-        text.includes("Assessment");
-
-      const urlChanged =
-        !url.endsWith("workmyt.com/");
-
-      return (
-        loginInputsGone ||
-        fieldDayText ||
-        urlChanged
-      );
-    },
-    {
-      timeout: 15000,
-      polling: 500,
-    }
-  );
-
-  console.log(
-    "[login] authentication state changed"
-  );
-} catch {
-  console.log(
-    "[login] auth state did not visibly change after 15 seconds"
-  );
+  console.log("[login] Login completed.");
 }
 
-const authInfo = await page.evaluate(() => ({
-  url: location.href,
-
-  title: document.title,
-
-  text: (
-    document.body?.innerText || ""
-  ).slice(0, 4000),
-
-  emailVisible: Boolean(
-    document.querySelector(
-      'input[type="email"]'
-    )
-  ),
-
-  passwordVisible: Boolean(
-    document.querySelector(
-      'input[type="password"]'
-    )
-  ),
-
-  inputs: Array.from(
-    document.querySelectorAll("input")
-  ).map((input) => ({
-    type: input.type,
-    placeholder: input.placeholder,
-    visible:
-      input.offsetWidth > 0 &&
-      input.offsetHeight > 0,
-  })),
-
-  buttons: Array.from(
-    document.querySelectorAll(
-      'button,[role="button"]'
-    )
-  )
-    .map((el) =>
-      (el.innerText || "").trim()
-    )
-    .filter(Boolean)
-    .slice(0, 50),
-}));
-
-console.log(
-  "[login] POST-LOGIN URL:",
-  authInfo.url
-);
-
-console.log(
-  "[login] POST-LOGIN title:",
-  authInfo.title
-);
-
-console.log(
-  "[login] email visible:",
-  authInfo.emailVisible
-);
-
-console.log(
-  "[login] password visible:",
-  authInfo.passwordVisible
-);
-
-console.log(
-  "[login] visible inputs:",
-  JSON.stringify(authInfo.inputs)
-);
-
-console.log(
-  "[login] visible buttons:",
-  JSON.stringify(authInfo.buttons)
-);
-
-console.log(
-  "[login] POST-LOGIN page text:",
-  authInfo.text
-);
-
-if (
-  authInfo.emailVisible &&
-  authInfo.passwordVisible
-) {
-  throw new Error(
-    "WorkMyT login workflow returned 200, but login inputs are still visible."
-  );
-}
-
-console.log("[login] Login completed.");
-}
 function normalizeWhitespace(value) {
   return String(value || "")
     .replace(/\s+/g, " ")
@@ -1213,37 +725,12 @@ async function waitForManualLogin(page) {
   console.log("[auth] opening WorkMyT");
   console.log("[auth] log in manually in the Chrome window");
   console.log("[auth] the script will click the assessment icon after login");
-  
-  console.log("[auth] navigating to:", FIELD_DAY_URL);
-  
-  try {
-    const response = await page.goto(FIELD_DAY_URL, {
-      waitUntil: "domcontentloaded",
-      timeout: 30000,
-    });
-  
-    console.log(
-      "[auth] navigation response:",
-      response ? response.status() : "no response"
-    );
-  } catch (error) {
-    console.log(
-      "[auth] page.goto did not finish normally:",
-      error.message
-    );
-  
-    console.log(
-      "[auth] continuing with currently loaded page:",
-      page.url()
-    );
-  }
-  
-  console.log("[auth] page navigation stage finished");
-  console.log("[auth] current URL:", page.url());
-  
+
+  await page.goto(FIELD_DAY_URL, {
+    waitUntil: "domcontentloaded",
+  });
+
   await loginIfNeeded(page);
-  console.log("[auth] loginIfNeeded finished");
-  console.log("[auth] URL after login:", page.url());
 
   await page.waitForFunction(
     () => {
@@ -1270,7 +757,7 @@ async function waitForManualLogin(page) {
       return alreadyOnFieldDay || Boolean(assessmentButton);
     },
     {
-      timeout: 60000,
+      timeout: 0,
     }
   );
 
@@ -1806,25 +1293,14 @@ async function run() {
     recursive: true,
   });
 
-  const isRender = Boolean(process.env.RENDER);
-
   const browser = await puppeteer.launch({
-    headless: isRender ? true : false,
-  
-    ...(isRender ? {} : { executablePath: CHROME_PATH }),
-    ...(isRender ? {} : { userDataDir: CHROME_USER_DATA_DIR }),
-  
-    defaultViewport: isRender
-      ? { width: 1920, height: 1080 }
-      : null,
-  
+    headless: false,
+    executablePath: CHROME_PATH,
+    userDataDir: CHROME_USER_DATA_DIR,
+    defaultViewport: null,
     args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",
+      "--start-maximized",
       "--disable-notifications",
-      "--window-size=1920,1080",
-
     ],
   });
 
@@ -1860,49 +1336,10 @@ async function run() {
 
     const pages = await browser.pages();
     const page = pages[0] || await browser.newPage();
-    
+
     page.setDefaultTimeout(30000);
     page.setDefaultNavigationTimeout(60000);
-    
-    // Capture FieldDay's XHR/fetch requests before navigation/login
-    attachNetworkLogger(page, "last-day-worked");
-    
-    if (isRender) {
-      await page.setViewport({
-        width: 1920,
-        height: 1080,
-      });
-    
-      await page.setUserAgent(
-        "Mozilla/5.0 (X11; Linux x86_64) " +
-        "AppleWebKit/537.36 (KHTML, like Gecko) " +
-        "Chrome/151.0.0.0 Safari/537.36"
-      );
-    
-      console.log(
-        "[chrome] Render browser compatibility settings applied"
-      );
-    }
-    
-    if (isRender) {
-      await page.setViewport({
-        width: 1920,
-        height: 1080,
-      });
-    
-      await page.setUserAgent(
-        "Mozilla/5.0 (X11; Linux x86_64) " +
-        "AppleWebKit/537.36 (KHTML, like Gecko) " +
-        "Chrome/151.0.0.0 Safari/537.36"
-      );
-    
-      console.log("[chrome] Render browser compatibility settings applied");
-    }
-    
-    console.log("[chrome] headless:", isRender);
-    console.log("[chrome] userAgent:", await page.evaluate(() => navigator.userAgent));
-    console.log("[chrome] webdriver:", await page.evaluate(() => navigator.webdriver));
-    
+
     await waitForManualLogin(page);
 
    await page.bringToFront();

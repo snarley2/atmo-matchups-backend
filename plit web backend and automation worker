@@ -1,0 +1,1393 @@
+warning: in the working copy of '.gitignore', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '.puppeteerrc.cjs', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README-API.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README-HOME-SERVER.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'generate-matchups-with-overrides.mjs', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'generate-team-rep-gaps.mjs', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'last-day-worked.mjs', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'package.json', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'run-week-days-fix.mjs', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'run.mjs', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'server/index.mjs', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'server/logic.mjs', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'server/sheets.mjs', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'write-agents-to-sheet.mjs', LF will be replaced by CRLF the next time Git touches it
+[1mdiff --git a/.gitignore b/.gitignore[m
+[1mindex ca8eaeb..2b78219 100644[m
+[1m--- a/.gitignore[m
+[1m+++ b/.gitignore[m
+[36m@@ -1,6 +1,6 @@[m
+ # Dependencies[m
+ node_modules/[m
+[31m-.cromhe-profile/[m
+[32m+[m[32m.chrome-profile/[m
+ # Environment variables[m
+ .env[m
+ .env.*[m
+[36m@@ -20,6 +20,7 @@[m [moutputs/[m
+ user-data/[m
+ chrome-profile/[m
+ .cache/[m
+[32m+[m[32m.puppeteer-cache/[m
+ [m
+ # Operating system/editor files[m
+ .DS_Store[m
+[1mdiff --git a/.puppeteerrc.cjs b/.puppeteerrc.cjs[m
+[1mindex 2b23cb5..03f5404 100644[m
+[1m--- a/.puppeteerrc.cjs[m
+[1m+++ b/.puppeteerrc.cjs[m
+[36m@@ -3,4 +3,4 @@[m [mconst path = require("path");[m
+ /** @type {import("puppeteer").Configuration} */[m
+ module.exports = {[m
+   cacheDirectory: path.join(__dirname, ".cache", "puppeteer"),[m
+[31m-};[m
+\ No newline at end of file[m
+[32m+[m[32m};[m
+[1mdiff --git a/last-day-worked.mjs b/last-day-worked.mjs[m
+[1mindex 827174f..bcc897f 100644[m
+[1m--- a/last-day-worked.mjs[m
+[1m+++ b/last-day-worked.mjs[m
+[36m@@ -70,301 +70,6 @@[m [mfunction delay(ms) {[m
+   return new Promise((resolve) => setTimeout(resolve, ms));[m
+ }[m
+ [m
+[31m-// ============================================================[m
+[31m-// WORKMYT NETWORK DISCOVERY LOGGER[m
+[31m-// Temporary: helps us discover the API/XHR requests FieldDay uses[m
+[31m-// ============================================================[m
+[31m-[m
+[31m-function redactSensitive(value) {[m
+[31m-  if (value == null) return value;[m
+[31m-[m
+[31m-  let text = String(value);[m
+[31m-[m
+[31m-  const secrets = [[m
+[31m-    process.env.WORKMYT_EMAIL,[m
+[31m-    process.env.WORKMYT_PASSWORD,[m
+[31m-  ].filter(Boolean);[m
+[31m-[m
+[31m-  for (const secret of secrets) {[m
+[31m-    text = text.split(secret).join("[REDACTED]");[m
+[31m-  }[m
+[31m-[m
+[31m-  // redact common sensitive JSON/form fields[m
+[31m-  text = text.replace([m
+[31m-    /("(?:password|token|access_token|refresh_token|authorization|cookie|session|sessionid|api_key|apikey)"\s*:\s*)"[^"]*"/gi,[m
+[31m-    '$1"[REDACTED]"'[m
+[31m-  );[m
+[31m-[m
+[31m-  text = text.replace([m
+[31m-    /((?:password|token|access_token|refresh_token|authorization|cookie|session|sessionid|api_key|apikey)=)[^&\s]+/gi,[m
+[31m-    "$1[REDACTED]"[m
+[31m-  );[m
+[31m-[m
+[31m-  return text;[m
+[31m-}[m
+[31m-[m
+[31m-function safeNetworkUrl(rawUrl) {[m
+[31m-  try {[m
+[31m-    const url = new URL(rawUrl);[m
+[31m-[m
+[31m-    const sensitiveKeys = [[m
+[31m-      "password",[m
+[31m-      "token",[m
+[31m-      "access_token",[m
+[31m-      "refresh_token",[m
+[31m-      "authorization",[m
+[31m-      "session",[m
+[31m-      "sessionid",[m
+[31m-      "api_key",[m
+[31m-      "apikey",[m
+[31m-    ];[m
+[31m-[m
+[31m-    for (const key of [...url.searchParams.keys()]) {[m
+[31m-      if ([m
+[31m-        sensitiveKeys.some((sensitive) =>[m
+[31m-          key.toLowerCase().includes(sensitive)[m
+[31m-        )[m
+[31m-      ) {[m
+[31m-        url.searchParams.set(key, "[REDACTED]");[m
+[31m-      }[m
+[31m-    }[m
+[31m-[m
+[31m-    return redactSensitive(url.toString());[m
+[31m-  } catch {[m
+[31m-    return redactSensitive(rawUrl);[m
+[31m-  }[m
+[31m-}[m
+[31m-[m
+[31m-function shouldSkipNetworkLog(rawUrl) {[m
+[31m-  try {[m
+[31m-    const url = new URL(rawUrl);[m
+[31m-[m
+[31m-    return ([m
+[31m-      url.pathname === "/user/m" ||[m
+[31m-      url.pathname === "/user/apm"[m
+[31m-    );[m
+[31m-  } catch {[m
+[31m-    return false;[m
+[31m-  }[m
+[31m-}[m
+[31m-[m
+[31m-function attachNetworkLogger(page, scriptName = "workmyt") {[m
+[31m-  console.log([m
+[31m-    `[network:${scriptName}] FieldDay network discovery enabled`[m
+[31m-  );[m
+[31m-[m
+[31m-  page.on("request", (request) => {[m
+[31m-    try {[m
+[31m-      const type = request.resourceType();[m
+[31m-[m
+[31m-      if (type !== "xhr" && type !== "fetch") {[m
+[31m-        return;[m
+[31m-      }[m
+[31m-[m
+[31m-      if (shouldSkipNetworkLog(request.url())) {[m
+[31m-        return;[m
+[31m-      }[m
+[31m-[m
+[31m-      const url = safeNetworkUrl(request.url());[m
+[31m-[m
+[31m-      console.log("");[m
+[31m-      console.log([m
+[31m-        `========== NETWORK REQUEST [${scriptName}] ==========`[m
+[31m-      );[m
+[31m-      console.log("TYPE:", type);[m
+[31m-      console.log("METHOD:", request.method());[m
+[31m-      console.log("URL:", url);[m
+[31m-[m
+[31m-      const postData = request.postData();[m
+[31m-[m
+[31m-      if (postData) {[m
+[31m-        const safePostData = redactSensitive(postData);[m
+[31m-[m
+[31m-        console.log([m
+[31m-          "POST DATA:",[m
+[31m-          safePostData.length > 10000[m
+[31m-            ? safePostData.slice(0, 10000) +[m
+[31m-                "... [TRUNCATED]"[m
+[31m-            : safePostData[m
+[31m-        );[m
+[31m-      }[m
+[31m-[m
+[31m-      console.log([m
+[31m-        "===================================================="[m
+[31m-      );[m
+[31m-      console.log("");[m
+[31m-    } catch (error) {[m
+[31m-      console.log([m
+[31m-        `[network:${scriptName}] request logger error:`,[m
+[31m-        error?.message || error[m
+[31m-      );[m
+[31m-    }[m
+[31m-  });[m
+[31m-[m
+[31m-  page.on("response", async (response) => {[m
+[31m-    if (shouldSkipNetworkLog(response.url())) return;[m
+[31m-  [m
+[31m-    try {[m
+[31m-      const request = response.request();[m
+[31m-      const type = request.resourceType();[m
+[31m-  [m
+[31m-      if (type !== "xhr" && type !== "fetch") {[m
+[31m-        return;[m
+[31m-      }[m
+[31m-  [m
+[31m-      const url = safeNetworkUrl(response.url());[m
+[31m-      const headers = response.headers();[m
+[31m-      const contentType =[m
+[31m-        headers["content-type"] || "";[m
+[31m-  [m
+[31m-      console.log("");[m
+[31m-      console.log([m
+[31m-        `========== NETWORK RESPONSE [${scriptName}] ==========`[m
+[31m-      );[m
+[31m-      console.log("STATUS:", response.status());[m
+[31m-      console.log("TYPE:", type);[m
+[31m-      console.log("URL:", url);[m
+[31m-      console.log("CONTENT-TYPE:", contentType);[m
+[31m-  [m
+[31m-      console.log([m
+[31m-        "======================================================"[m
+[31m-      );[m
+[31m-      console.log("");[m
+[31m-    } catch (error) {[m
+[31m-      console.log([m
+[31m-        `[network:${scriptName}] response logger error:`,[m
+[31m-        error?.message || error[m
+[31m-      );[m
+[31m-    }[m
+[31m-  });[m
+[31m-[m
+[31m-  page.on("requestfinished", async (request) => {[m
+[31m-    try {[m
+[31m-      const type = request.resourceType();[m
+[31m-[m
+[31m-      if (type !== "xhr" && type !== "fetch") {[m
+[31m-        return;[m
+[31m-      }[m
+[31m-[m
+[31m-      if (shouldSkipNetworkLog(request.url())) {[m
+[31m-        return;[m
+[31m-      }[m
+[31m-[m
+[31m-      const response = request.response();[m
+[31m-[m
+[31m-      if (!response) {[m
+[31m-        return;[m
+[31m-      }[m
+[31m-[m
+[31m-      const url = safeNetworkUrl(request.url());[m
+[31m-[m
+[31m-      const headers = response.headers();[m
+[31m-      const contentType =[m
+[31m-        headers["content-type"] || "";[m
+[31m-[m
+[31m-      const likelyReadable =[m
+[31m-        contentType.includes("json") ||[m
+[31m-        contentType.includes("text") ||[m
+[31m-        url.includes("/workflow/") ||[m
+[31m-        url.includes("/api/");[m
+[31m-[m
+[31m-      if (!likelyReadable) {[m
+[31m-        return;[m
+[31m-      }[m
+[31m-[m
+[31m-      console.log("");[m
+[31m-      console.log([m
+[31m-        `========== NETWORK BODY [${scriptName}] ==========`[m
+[31m-      );[m
+[31m-      console.log("URL:", url);[m
+[31m-[m
+[31m-      try {[m
+[31m-        const bodyPromise = response.text();[m
+[31m-[m
+[31m-        const timeoutPromise = new Promise([m
+[31m-          (_, reject) =>[m
+[31m-            setTimeout([m
+[31m-              () =>[m
+[31m-                reject([m
+[31m-                  new Error("body read timeout")[m
+[31m-                ),[m
+[31m-              15000[m
+[31m-            )[m
+[31m-        );[m
+[31m-[m
+[31m-        const rawBody = await Promise.race([[m
+[31m-          bodyPromise,[m
+[31m-          timeoutPromise,[m
+[31m-        ]);[m
+[31m-[m
+[31m-        const safeBody =[m
+[31m-          redactSensitive(rawBody);[m
+[31m-[m
+[31m-        console.log([m
+[31m-          "BODY:",[m
+[31m-          safeBody.length > 30000[m
+[31m-            ? safeBody.slice(0, 30000) +[m
+[31m-                "... [TRUNCATED]"[m
+[31m-            : safeBody[m
+[31m-        );[m
+[31m-      } catch (error) {[m
+[31m-        console.log([m
+[31m-          "BODY: [could not read]",[m
+[31m-          error?.message || error[m
+[31m-        );[m
+[31m-      }[m
+[31m-[m
+[31m-      console.log([m
+[31m-        "=================================================="[m
+[31m-      );[m
+[31m-      console.log("");[m
+[31m-    } catch (error) {[m
+[31m-      console.log([m
+[31m-        `[network:${scriptName}] requestfinished logger error:`,[m
+[31m-        error?.message || error[m
+[31m-      );[m
+[31m-    }[m
+[31m-  });[m
+[31m-[m
+[31m-  page.on("requestfailed", (request) => {[m
+[31m-    try {[m
+[31m-      const type = request.resourceType();[m
+[31m-[m
+[31m-      if (type !== "xhr" && type !== "fetch") {[m
+[31m-        return;[m
+[31m-      }[m
+[31m-[m
+[31m-      if (shouldSkipNetworkLog(request.url())) {[m
+[31m-        return;[m
+[31m-      }[m
+[31m-[m
+[31m-      console.log("");[m
+[31m-      console.log([m
+[31m-        `========== NETWORK FAILED [${scriptName}] ==========`[m
+[31m-      );[m
+[31m-      console.log("METHOD:", request.method());[m
+[31m-      console.log([m
+[31m-        "URL:",[m
+[31m-        safeNetworkUrl(request.url())[m
+[31m-      );[m
+[31m-      console.log([m
+[31m-        "ERROR:",[m
+[31m-        request.failure()?.errorText ||[m
+[31m-          "unknown"[m
+[31m-      );[m
+[31m-[m
+[31m-      console.log([m
+[31m-        "===================================================="[m
+[31m-      );[m
+[31m-    } catch (error) {[m
+[31m-      console.log([m
+[31m-        `[network:${scriptName}] requestfailed logger error:`,[m
+[31m-        error?.message || error[m
+[31m-      );[m
+[31m-    }[m
+[31m-  });[m
+[31m-}[m
+[31m-[m
+ function calculateFlowRates(performance) {[m
+   const talks =[m
+     Number(performance.talk || 0);[m
+[36m@@ -482,240 +187,47 @@[m [masync function loginIfNeeded(page) {[m
+   const emailSelector = 'input[type="email"]';[m
+   const passwordSelector = 'input[type="password"]';[m
+ [m
+[31m-  const email = process.env.WORKMYT_EMAIL;[m
+[31m-  const password = process.env.WORKMYT_PASSWORD;[m
+[31m-[m
+[31m-  if (!email || !password) {[m
+[31m-    throw new Error([m
+[31m-      "WORKMYT_EMAIL or WORKMYT_PASSWORD environment variable is missing."[m
+[31m-    );[m
+[31m-  }[m
+[31m-[m
+[31m-  console.log("[login] checking current page...");[m
+[31m-  console.log("[login] current URL:", page.url());[m
+[31m-[m
+   const loginPageVisible = await page[m
+     .waitForSelector(emailSelector, {[m
+       visible: true,[m
+[31m-      timeout: 10000,[m
+[32m+[m[32m      timeout: 3000,[m
+     })[m
+     .then(() => true)[m
+     .catch(() => false);[m
+ [m
+   if (!loginPageVisible) {[m
+[31m-    console.log("[login] Email field not detected.");[m
+[31m-[m
+[31m-    const pageInfo = await page.evaluate(() => ({[m
+[31m-      url: location.href,[m
+[31m-      title: document.title,[m
+[31m-      text: (document.body?.innerText || "").slice(0, 1000),[m
+[31m-    }));[m
+[31m-[m
+[31m-    console.log("[login] page URL:", pageInfo.url);[m
+[31m-    console.log("[login] page title:", pageInfo.title);[m
+[31m-    console.log("[login] page text:", pageInfo.text);[m
+[31m-[m
+[31m-    const alreadyLoggedIn =[m
+[31m-      pageInfo.text.includes("Daily") ||[m
+[31m-      pageInfo.text.includes("Campaign") ||[m
+[31m-      pageInfo.text.includes("Rep Name");[m
+[31m-[m
+[31m-    if (alreadyLoggedIn) {[m
+[31m-      console.log("[login] Already logged in.");[m
+[31m-      return;[m
+[31m-    }[m
+[31m-[m
+[31m-    throw new Error([m
+[31m-      "WorkMyT login form was not found and FieldDay was not detected."[m
+[31m-    );[m
+[32m+[m[32m    console.log("[login] Already logged in.");[m
+[32m+[m[32m    return;[m
+   }[m
+ [m
+   console.log("[login] Login page detected.");[m
+ [m
+[31m-  await page.click(emailSelector, {[m
+[31m-    clickCount: 3,[m
+[31m-  });[m
+[31m-[m
+[31m-  await page.type(emailSelector, email, {[m
+[32m+[m[32m  await page.click(emailSelector, { clickCount: 3 });[m
+[32m+[m[32m  await page.type(emailSelector, process.env.WORKMYT_EMAIL, {[m
+     delay: 30,[m
+   });[m
+ [m
+[31m-  await page.click(passwordSelector, {[m
+[31m-    clickCount: 3,[m
+[31m-  });[m
+[31m-[m
+[31m-  await page.type(passwordSelector, password, {[m
+[32m+[m[32m  await page.click(passwordSelector, { clickCount: 3 });[m
+[32m+[m[32m  await page.type(passwordSelector, process.env.WORKMYT_PASSWORD, {[m
+     delay: 30,[m
+   });[m
+[31m-[m
+[31m- console.log("[login] credentials entered; submitting");[m
+[31m-[m
+[31m-  const workflowResponsePromise = page.waitForResponse([m
+[31m-    (response) =>[m
+[31m-      response.url().includes("/workflow/start") &&[m
+[31m-      response.request().method() === "POST",[m
+[31m-    {[m
+[31m-      timeout: 30000,[m
+[31m-    }[m
+[31m-  );[m
+[31m-  [m
+[32m+[m[32m  if (!email || !password) {[m
+[32m+[m[32m    throw new Error([m
+[32m+[m[32m      "WORKMYT_EMAIL or WORKMYT_PASSWORD environment variable is missing."[m
+[32m+[m[32m    );[m
+[32m+[m[32m  }[m
+   await page.keyboard.press("Enter");[m
+[31m-  [m
+[31m-  console.log("[login] submit sent to WorkMyT");[m
+[31m-  [m
+[31m-  const workflowResponse =[m
+[31m-    await workflowResponsePromise;[m
+[31m-  [m
+[31m-  console.log([m
+[31m-    "[login] workflow response status:",[m
+[31m-    workflowResponse.status()[m
+[31m-  );[m
+ [m
+[31m-  [m
+[31m-  console.log([m
+[31m-  "[login] workflow returned; waiting for auth state"[m
+[31m-);[m
+[31m-[m
+[31m-try {[m
+   await page.waitForFunction([m
+[31m-    () => {[m
+[31m-      const email =[m
+[31m-        document.querySelector([m
+[31m-          'input[type="email"]'[m
+[31m-        );[m
+[31m-[m
+[31m-      const password =[m
+[31m-        document.querySelector([m
+[31m-          'input[type="password"]'[m
+[31m-        );[m
+[31m-[m
+[31m-      const text =[m
+[31m-        document.body?.innerText || "";[m
+[31m-[m
+[31m-      const url = location.href;[m
+[31m-[m
+[31m-      const loginInputsGone =[m
+[31m-        !email && !password;[m
+[31m-[m
+[31m-      const fieldDayText =[m
+[31m-        text.includes("Daily") ||[m
+[31m-        text.includes("Campaign") ||[m
+[31m-        text.includes("Rep Name") ||[m
+[31m-        text.includes("Assessment");[m
+[31m-[m
+[31m-      const urlChanged =[m
+[31m-        !url.endsWith("workmyt.com/");[m
+[31m-[m
+[31m-      return ([m
+[31m-        loginInputsGone ||[m
+[31m-        fieldDayText ||[m
+[31m-        urlChanged[m
+[31m-      );[m
+[31m-    },[m
+[32m+[m[32m    () => !document.querySelector('input[type="email"]'),[m
+     {[m
+[31m-      timeout: 15000,[m
+[31m-      polling: 500,[m
+[32m+[m[32m      timeout: 30000,[m
+     }[m
+   );[m
+ [m
+[31m-  console.log([m
+[31m-    "[login] authentication state changed"[m
+[31m-  );[m
+[31m-} catch {[m
+[31m-  console.log([m
+[31m-    "[login] auth state did not visibly change after 15 seconds"[m
+[31m-  );[m
+[31m-}[m
+[31m-[m
+[31m-const authInfo = await page.evaluate(() => ({[m
+[31m-  url: location.href,[m
+[31m-[m
+[31m-  title: document.title,[m
+[31m-[m
+[31m-  text: ([m
+[31m-    document.body?.innerText || ""[m
+[31m-  ).slice(0, 4000),[m
+[31m-[m
+[31m-  emailVisible: Boolean([m
+[31m-    document.querySelector([m
+[31m-      'input[type="email"]'[m
+[31m-    )[m
+[31m-  ),[m
+[31m-[m
+[31m-  passwordVisible: Boolean([m
+[31m-    document.querySelector([m
+[31m-      'input[type="password"]'[m
+[31m-    )[m
+[31m-  ),[m
+[31m-[m
+[31m-  inputs: Array.from([m
+[31m-    document.querySelectorAll("input")[m
+[31m-  ).map((input) => ({[m
+[31m-    type: input.type,[m
+[31m-    placeholder: input.placeholder,[m
+[31m-    visible:[m
+[31m-      input.offsetWidth > 0 &&[m
+[31m-      input.offsetHeight > 0,[m
+[31m-  })),[m
+[31m-[m
+[31m-  buttons: Array.from([m
+[31m-    document.querySelectorAll([m
+[31m-      'button,[role="button"]'[m
+[31m-    )[m
+[31m-  )[m
+[31m-    .map((el) =>[m
+[31m-      (el.innerText || "").trim()[m
+[31m-    )[m
+[31m-    .filter(Boolean)[m
+[31m-    .slice(0, 50),[m
+[31m-}));[m
+[31m-[m
+[31m-console.log([m
+[31m-  "[login] POST-LOGIN URL:",[m
+[31m-  authInfo.url[m
+[31m-);[m
+[31m-[m
+[31m-console.log([m
+[31m-  "[login] POST-LOGIN title:",[m
+[31m-  authInfo.title[m
+[31m-);[m
+[31m-[m
+[31m-console.log([m
+[31m-  "[login] email visible:",[m
+[31m-  authInfo.emailVisible[m
+[31m-);[m
+[31m-[m
+[31m-console.log([m
+[31m-  "[login] password visible:",[m
+[31m-  authInfo.passwordVisible[m
+[31m-);[m
+[31m-[m
+[31m-console.log([m
+[31m-  "[login] visible inputs:",[m
+[31m-  JSON.stringify(authInfo.inputs)[m
+[31m-);[m
+[31m-[m
+[31m-console.log([m
+[31m-  "[login] visible buttons:",[m
+[31m-  JSON.stringify(authInfo.buttons)[m
+[31m-);[m
+[31m-[m
+[31m-console.log([m
+[31m-  "[login] POST-LOGIN page text:",[m
+[31m-  authInfo.text[m
+[31m-);[m
+[31m-[m
+[31m-if ([m
+[31m-  authInfo.emailVisible &&[m
+[31m-  authInfo.passwordVisible[m
+[31m-) {[m
+[31m-  throw new Error([m
+[31m-    "WorkMyT login workflow returned 200, but login inputs are still visible."[m
+[31m-  );[m
+[32m+[m[32m  console.log("[login] Login completed.");[m
+ }[m
+ [m
+[31m-console.log("[login] Login completed.");[m
+[31m-}[m
+ function normalizeWhitespace(value) {[m
+   return String(value || "")[m
+     .replace(/\s+/g, " ")[m
+[36m@@ -1213,37 +725,12 @@[m [masync function waitForManualLogin(page) {[m
+   console.log("[auth] opening WorkMyT");[m
+   console.log("[auth] log in manually in the Chrome window");[m
+   console.log("[auth] the script will click the assessment icon after login");[m
+[31m-  [m
+[31m-  console.log("[auth] navigating to:", FIELD_DAY_URL);[m
+[31m-  [m
+[31m-  try {[m
+[31m-    const response = await page.goto(FIELD_DAY_URL, {[m
+[31m-      waitUntil: "domcontentloaded",[m
+[31m-      timeout: 30000,[m
+[31m-    });[m
+[31m-  [m
+[31m-    console.log([m
+[31m-      "[auth] navigation response:",[m
+[31m-      response ? response.status() : "no response"[m
+[31m-    );[m
+[31m-  } catch (error) {[m
+[31m-    console.log([m
+[31m-      "[auth] page.goto did not finish normally:",[m
+[31m-      error.message[m
+[31m-    );[m
+[31m-  [m
+[31m-    console.log([m
+[31m-      "[auth] continuing with currently loaded page:",[m
+[31m-      page.url()[m
+[31m-    );[m
+[31m-  }[m
+[31m-  [m
+[31m-  console.log("[auth] page navigation stage finished");[m
+[31m-  console.log("[auth] current URL:", page.url());[m
+[31m-  [m
+[32m+[m
+[32m+[m[32m  await page.goto(FIELD_DAY_URL, {[m
+[32m+[m[32m    waitUntil: "domcontentloaded",[m
+[32m+[m[32m  });[m
+[32m+[m
+   await loginIfNeeded(page);[m
+[31m-  console.log("[auth] loginIfNeeded finished");[m
+[31m-  console.log("[auth] URL after login:", page.url());[m
+ [m
+   await page.waitForFunction([m
+     () => {[m
+[36m@@ -1270,7 +757,7 @@[m [masync function waitForManualLogin(page) {[m
+       return alreadyOnFieldDay || Boolean(assessmentButton);[m
+     },[m
+     {[m
+[31m-      timeout: 60000,[m
+[32m+[m[32m      timeout: 0,[m
+     }[m
+   );[m
+ [m
+[36m@@ -1806,25 +1293,14 @@[m [masync function run() {[m
+     recursive: true,[m
+   });[m
+ [m
+[31m-  const isRender = Boolean(process.env.RENDER);[m
+[31m-[m
+   const browser = await puppeteer.launch({[m
+[31m-    headless: isRender ? true : false,[m
+[31m-  [m
+[31m-    ...(isRender ? {} : { executablePath: CHROME_PATH }),[m
+[31m-    ...(isRender ? {} : { userDataDir: CHROME_USER_DATA_DIR }),[m
+[31m-  [m
+[31m-    defaultViewport: isRender[m
+[31m-      ? { width: 1920, height: 1080 }[m
+[31m-      : null,[m
+[31m-  [m
+[32m+[m[32m    headless: false,[m
+[32m+[m[32m    executablePath: CHROME_PATH,[m
+[32m+[m[32m    userDataDir: CHROME_USER_DATA_DIR,[m
+[32m+[m[32m    defaultViewport: null,[m
+     args: [[m
+[31m-      "--no-sandbox",[m
+[31m-      "--disable-setuid-sandbox",[m
+[31m-      "--disable-dev-shm-usage",[m
+[32m+[m[32m      "--start-maximized",[m
+       "--disable-notifications",[m
+[31m-      "--window-size=1920,1080",[m
+[31m-[m
+     ],[m
+   });[m
+ [m
+[36m@@ -1860,49 +1336,10 @@[m [masync function run() {[m
+ [m
+     const pages = await browser.pages();[m
+     const page = pages[0] || await browser.newPage();[m
+[31m-    [m
+[32m+[m
+     page.setDefaultTimeout(30000);[m
+     page.setDefaultNavigationTimeout(60000);[m
+[31m-    [m
+[31m-    // Capture FieldDay's XHR/fetch requests before navigation/login[m
+[31m-    attachNetworkLogger(page, "last-day-worked");[m
+[31m-    [m
+[31m-    if (isRender) {[m
+[31m-      await page.setViewport({[m
+[31m-        width: 1920,[m
+[31m-        height: 1080,[m
+[31m-      });[m
+[31m-    [m
+[31m-      await page.setUserAgent([m
+[31m-        "Mozilla/5.0 (X11; Linux x86_64) " +[m
+[31m-        "AppleWebKit/537.36 (KHTML, like Gecko) " +[m
+[31m-        "Chrome/151.0.0.0 Safari/537.36"[m
+[31m-      );[m
+[31m-    [m
+[31m-      console.log([m
+[31m-        "[chrome] Render browser compatibility settings applied"[m
+[31m-      );[m
+[31m-    }[m
+[31m-    [m
+[31m-    if (isRender) {[m
+[31m-      await page.setViewport({[m
+[31m-        width: 1920,[m
+[31m-        height: 1080,[m
+[31m-      });[m
+[31m-    [m
+[31m-      await page.setUserAgent([m
+[31m-        "Mozilla/5.0 (X11; Linux x86_64) " +[m
+[31m-        "AppleWebKit/537.36 (KHTML, like Gecko) " +[m
+[31m-        "Chrome/151.0.0.0 Safari/537.36"[m
+[31m-      );[m
+[31m-    [m
+[31m-      console.log("[chrome] Render browser compatibility settings applied");[m
+[31m-    }[m
+[31m-    [m
+[31m-    console.log("[chrome] headless:", isRender);[m
+[31m-    console.log("[chrome] userAgent:", await page.evaluate(() => navigator.userAgent));[m
+[31m-    console.log("[chrome] webdriver:", await page.evaluate(() => navigator.webdriver));[m
+[31m-    [m
+[32m+[m
+     await waitForManualLogin(page);[m
+ [m
+    await page.bringToFront();[m
+[1mdiff --git a/package.json b/package.json[m
+[1mindex c97c62c..4391497 100644[m
+[1m--- a/package.json[m
+[1m+++ b/package.json[m
+[36m@@ -5,6 +5,8 @@[m
+   "scripts": {[m
+     "server": "node server/index.mjs",[m
+     "dev:server": "node --watch server/index.mjs",[m
+[32m+[m[32m    "automation": "node automation/index.mjs",[m
+[32m+[m[32m    "automation:once": "node run.mjs",[m
+     "run": "node run.mjs",[m
+     "run:last-worked": "node last-day-worked.mjs",[m
+     "generate:gaps": "node generate-team-rep-gaps.mjs",[m
+[1mdiff --git a/run-week-days-fix.mjs b/run-week-days-fix.mjs[m
+[1mindex 0fe9471..57718c9 100644[m
+[1m--- a/run-week-days-fix.mjs[m
+[1m+++ b/run-week-days-fix.mjs[m
+[36m@@ -67,238 +67,6 @@[m [mfunction delay(ms) {[m
+   return new Promise((resolve) => setTimeout(resolve, ms));[m
+ }[m
+ [m
+[31m-function redactSensitive(value) {[m
+[31m-  if (value == null) return value;[m
+[31m-[m
+[31m-  let text = String(value);[m
+[31m-[m
+[31m-  const secrets = [[m
+[31m-    process.env.WORKMYT_EMAIL,[m
+[31m-    process.env.WORKMYT_PASSWORD,[m
+[31m-  ].filter(Boolean);[m
+[31m-[m
+[31m-  for (const secret of secrets) {[m
+[31m-    text = text.split(secret).join("[REDACTED]");[m
+[31m-  }[m
+[31m-[m
+[31m-  // redact common sensitive JSON/form fields[m
+[31m-  text = text.replace([m
+[31m-    /("(?:password|token|access_token|refresh_token|authorization|cookie|session|sessionid|api_key|apikey)"\s*:\s*)"[^"]*"/gi,[m
+[31m-    '$1"[REDACTED]"'[m
+[31m-  );[m
+[31m-[m
+[31m-  text = text.replace([m
+[31m-    /((?:password|token|access_token|refresh_token|authorization|cookie|session|sessionid|api_key|apikey)=)[^&\s]+/gi,[m
+[31m-    "$1[REDACTED]"[m
+[31m-  );[m
+[31m-[m
+[31m-  return text;[m
+[31m-}[m
+[31m-[m
+[31m-function safeNetworkUrl(rawUrl) {[m
+[31m-  try {[m
+[31m-    const url = new URL(rawUrl);[m
+[31m-[m
+[31m-    const sensitiveKeys = [[m
+[31m-      "password",[m
+[31m-      "token",[m
+[31m-      "access_token",[m
+[31m-      "refresh_token",[m
+[31m-      "authorization",[m
+[31m-      "session",[m
+[31m-      "sessionid",[m
+[31m-      "api_key",[m
+[31m-      "apikey",[m
+[31m-    ];[m
+[31m-[m
+[31m-    for (const key of [...url.searchParams.keys()]) {[m
+[31m-      if ([m
+[31m-        sensitiveKeys.some((sensitive) =>[m
+[31m-          key.toLowerCase().includes(sensitive)[m
+[31m-        )[m
+[31m-      ) {[m
+[31m-        url.searchParams.set(key, "[REDACTED]");[m
+[31m-      }[m
+[31m-    }[m
+[31m-[m
+[31m-    return redactSensitive(url.toString());[m
+[31m-  } catch {[m
+[31m-    return redactSensitive(rawUrl);[m
+[31m-  }[m
+[31m-}[m
+[31m-[m
+[31m-function attachNetworkLogger(page, scriptName = "workmyt") {[m
+[31m-  console.log([m
+[31m-    `[network:${scriptName}] FieldDay network discovery enabled`[m
+[31m-  );[m
+[31m-[m
+[31m-  page.on("request", (request) => {[m
+[31m-    try {[m
+[31m-      const type = request.resourceType();[m
+[31m-[m
+[31m-      if (type !== "xhr" && type !== "fetch") {[m
+[31m-        return;[m
+[31m-      }[m
+[31m-[m
+[31m-      const url = safeNetworkUrl(request.url());[m
+[31m-[m
+[31m-      console.log("");[m
+[31m-      console.log([m
+[31m-        `========== NETWORK REQUEST [${scriptName}] ==========`[m
+[31m-      );[m
+[31m-      console.log("TYPE:", type);[m
+[31m-      console.log("METHOD:", request.method());[m
+[31m-      console.log("URL:", url);[m
+[31m-[m
+[31m-      const postData = request.postData();[m
+[31m-[m
+[31m-      if (postData) {[m
+[31m-        const safePostData = redactSensitive(postData);[m
+[31m-[m
+[31m-        console.log([m
+[31m-          "POST DATA:",[m
+[31m-          safePostData.length > 10000[m
+[31m-            ? safePostData.slice(0, 10000) +[m
+[31m-                "... [TRUNCATED]"[m
+[31m-            : safePostData[m
+[31m-        );[m
+[31m-      }[m
+[31m-[m
+[31m-      console.log([m
+[31m-        "===================================================="[m
+[31m-      );[m
+[31m-      console.log("");[m
+[31m-    } catch (error) {[m
+[31m-      console.log([m
+[31m-        `[network:${scriptName}] request logger error:`,[m
+[31m-        error?.message || error[m
+[31m-      );[m
+[31m-    }[m
+[31m-  });[m
+[31m-[m
+[31m-  page.on("response", async (response) => {[m
+[31m-  try {[m
+[31m-    const request = response.request();[m
+[31m-    const type = request.resourceType();[m
+[31m-[m
+[31m-    if (type !== "xhr" && type !== "fetch") return;[m
+[31m-[m
+[31m-    const url = safeNetworkUrl(response.url());[m
+[31m-    const headers = response.headers();[m
+[31m-    const contentType = headers["content-type"] || "";[m
+[31m-[m
+[31m-    console.log("");[m
+[31m-    console.log([m
+[31m-      `========== NETWORK RESPONSE [${scriptName}] ==========`[m
+[31m-    );[m
+[31m-    console.log("STATUS:", response.status());[m
+[31m-    console.log("TYPE:", type);[m
+[31m-    console.log("URL:", url);[m
+[31m-    console.log("CONTENT-TYPE:", contentType);[m
+[31m-[m
+[31m-    console.log([m
+[31m-      "======================================================"[m
+[31m-    );[m
+[31m-    console.log("");[m
+[31m-  } catch (error) {[m
+[31m-    console.log([m
+[31m-      `[network:${scriptName}] response logger error:`,[m
+[31m-      error?.message || error[m
+[31m-    );[m
+[31m-  }[m
+[31m-});[m
+[31m-[m
+[31m-page.on("requestfinished", async (request) => {[m
+[31m-  try {[m
+[31m-    const type = request.resourceType();[m
+[31m-[m
+[31m-    if (type !== "xhr" && type !== "fetch") return;[m
+[31m-[m
+[31m-    const response = request.response();[m
+[31m-    if (!response) return;[m
+[31m-[m
+[31m-    const url = safeNetworkUrl(request.url());[m
+[31m-    const headers = response.headers();[m
+[31m-    const contentType = headers["content-type"] || "";[m
+[31m-[m
+[31m-    const likelyReadable =[m
+[31m-      contentType.includes("json") ||[m
+[31m-      contentType.includes("text") ||[m
+[31m-      url.includes("/workflow/") ||[m
+[31m-      url.includes("/api/");[m
+[31m-[m
+[31m-    if (!likelyReadable) return;[m
+[31m-[m
+[31m-    console.log("");[m
+[31m-    console.log([m
+[31m-      `========== NETWORK BODY [${scriptName}] ==========`[m
+[31m-    );[m
+[31m-    console.log("URL:", url);[m
+[31m-[m
+[31m-    try {[m
+[31m-      const bodyPromise = response.text();[m
+[31m-[m
+[31m-      const timeoutPromise = new Promise((_, reject) =>[m
+[31m-        setTimeout([m
+[31m-          () => reject(new Error("body read timeout")),[m
+[31m-          15000[m
+[31m-        )[m
+[31m-      );[m
+[31m-[m
+[31m-      const rawBody = await Promise.race([[m
+[31m-        bodyPromise,[m
+[31m-        timeoutPromise,[m
+[31m-      ]);[m
+[31m-[m
+[31m-      const safeBody = redactSensitive(rawBody);[m
+[31m-[m
+[31m-      console.log([m
+[31m-        "BODY:",[m
+[31m-        safeBody.length > 30000[m
+[31m-          ? safeBody.slice(0, 30000) +[m
+[31m-              "... [TRUNCATED]"[m
+[31m-          : safeBody[m
+[31m-      );[m
+[31m-    } catch (error) {[m
+[31m-      console.log([m
+[31m-        "BODY: [could not read]",[m
+[31m-        error?.message || error[m
+[31m-      );[m
+[31m-    }[m
+[31m-[m
+[31m-    console.log([m
+[31m-      "=================================================="[m
+[31m-    );[m
+[31m-    console.log("");[m
+[31m-  } catch (error) {[m
+[31m-    console.log([m
+[31m-      `[network:${scriptName}] requestfinished logger error:`,[m
+[31m-      error?.message || error[m
+[31m-    );[m
+[31m-  }[m
+[31m-});[m
+[31m-[m
+[31m-page.on("requestfailed", (request) => {[m
+[31m-  const type = request.resourceType();[m
+[31m-[m
+[31m-  if (type !== "xhr" && type !== "fetch") return;[m
+[31m-[m
+[31m-  console.log("");[m
+[31m-  console.log([m
+[31m-    `========== NETWORK FAILED [${scriptName}] ==========`[m
+[31m-  );[m
+[31m-  console.log("METHOD:", request.method());[m
+[31m-  console.log("URL:", safeNetworkUrl(request.url()));[m
+[31m-  console.log([m
+[31m-    "ERROR:",[m
+[31m-    request.failure()?.errorText || "unknown"[m
+[31m-  );[m
+[31m-  console.log([m
+[31m-    "===================================================="[m
+[31m-  );[m
+[31m-});[m
+[31m-}[m
+[31m-[m
+ function calculateFlowRates(performance) {[m
+   const talks =[m
+     Number(performance.talk || 0);[m
+[36m@@ -416,137 +184,45 @@[m [masync function loginIfNeeded(page) {[m
+   const emailSelector = 'input[type="email"]';[m
+   const passwordSelector = 'input[type="password"]';[m
+ [m
+[31m-  const email = process.env.WORKMYT_EMAIL;[m
+[31m-  const password = process.env.WORKMYT_PASSWORD;[m
+[31m-[m
+[31m-  if (!email || !password) {[m
+[31m-    throw new Error([m
+[31m-      "WORKMYT_EMAIL or WORKMYT_PASSWORD environment variable is missing."[m
+[31m-    );[m
+[31m-  }[m
+[31m-[m
+[31m-  console.log("[login] checking current page...");[m
+[31m-  console.log("[login] current URL:", page.url());[m
+[31m-[m
+   const loginPageVisible = await page[m
+     .waitForSelector(emailSelector, {[m
+       visible: true,[m
+[31m-      timeout: 10000,[m
+[32m+[m[32m      timeout: 3000,[m
+     })[m
+     .then(() => true)[m
+     .catch(() => false);[m
+ [m
+   if (!loginPageVisible) {[m
+[31m-    console.log("[login] Email field not detected.");[m
+[31m-[m
+[31m-    const pageInfo = await page.evaluate(() => ({[m
+[31m-      url: location.href,[m
+[31m-      title: document.title,[m
+[31m-      text: (document.body?.innerText || "").slice(0, 1000),[m
+[31m-    }));[m
+[31m-[m
+[31m-    console.log("[login] page URL:", pageInfo.url);[m
+[31m-    console.log("[login] page title:", pageInfo.title);[m
+[31m-    console.log("[login] page text:", pageInfo.text);[m
+[31m-[m
+[31m-    const alreadyLoggedIn =[m
+[31m-      pageInfo.text.includes("Daily") ||[m
+[31m-      pageInfo.text.includes("Campaign") ||[m
+[31m-      pageInfo.text.includes("Rep Name");[m
+[31m-[m
+[31m-    if (alreadyLoggedIn) {[m
+[31m-      console.log("[login] Already logged in.");[m
+[31m-      return;[m
+[31m-    }[m
+[31m-[m
+[31m-    throw new Error([m
+[31m-      "WorkMyT login form was not found and FieldDay was not detected."[m
+[31m-    );[m
+[32m+[m[32m    console.log("[login] Already logged in.");[m
+[32m+[m[32m    return;[m
+   }[m
+ [m
+   console.log("[login] Login page detected.");[m
+ [m
+[31m-  await page.click(emailSelector, {[m
+[31m-    clickCount: 3,[m
+[31m-  });[m
+[31m-[m
+[31m-  await page.type(emailSelector, email, {[m
+[32m+[m[32m  await page.click(emailSelector, { clickCount: 3 });[m
+[32m+[m[32m  await page.type(emailSelector, process.env.WORKMYT_EMAIL, {[m
+     delay: 30,[m
+   });[m
+ [m
+[31m-  await page.click(passwordSelector, {[m
+[31m-    clickCount: 3,[m
+[31m-  });[m
+[31m-[m
+[31m-  await page.type(passwordSelector, password, {[m
+[32m+[m[32m  await page.click(passwordSelector, { clickCount: 3 });[m
+[32m+[m[32m  await page.type(passwordSelector, process.env.WORKMYT_PASSWORD, {[m
+     delay: 30,[m
+   });[m
+[31m-[m
+[31m-  console.log("[login] credentials entered; submitting");[m
+[31m-[m
+[31m-  await page.keyboard.press("Enter");[m
+[31m-[m
+[31m-  console.log("[login] submit sent to WorkMyT");[m
+[31m-[m
+[31m-  try {[m
+[31m-    await page.waitForFunction([m
+[31m-      () => {[m
+[31m-        const email =[m
+[31m-          document.querySelector('input[type="email"]');[m
+[31m-[m
+[31m-        const password =[m
+[31m-          document.querySelector('input[type="password"]');[m
+[31m-[m
+[31m-        const text =[m
+[31m-          document.body?.innerText || "";[m
+[31m-[m
+[31m-        return ([m
+[31m-          (!email && !password) ||[m
+[31m-          text.includes("Daily") ||[m
+[31m-          text.includes("Campaign") ||[m
+[31m-          text.includes("Rep Name")[m
+[31m-        );[m
+[31m-      },[m
+[31m-      {[m
+[31m-        timeout: 30000,[m
+[31m-        polling: 500,[m
+[31m-      }[m
+[31m-    );[m
+[31m-[m
+[31m-    console.log("[login] login page changed successfully");[m
+[31m-  } catch {[m
+[31m-    const info = await page.evaluate(() => ({[m
+[31m-      url: location.href,[m
+[31m-      title: document.title,[m
+[31m-      text: (document.body?.innerText || "")[m
+[31m-        .slice(0, 2000),[m
+[31m-      hasEmail: Boolean([m
+[31m-        document.querySelector('input[type="email"]')[m
+[31m-      ),[m
+[31m-      hasPassword: Boolean([m
+[31m-        document.querySelector('input[type="password"]')[m
+[31m-      ),[m
+[31m-    }));[m
+[31m-[m
+[31m-    console.log("[login] login wait timed out");[m
+[31m-    console.log("[login] URL:", info.url);[m
+[31m-    console.log("[login] title:", info.title);[m
+[31m-    console.log([m
+[31m-      "[login] email field still visible:",[m
+[31m-      info.hasEmail[m
+[31m-    );[m
+[31m-    console.log([m
+[31m-      "[login] password field still visible:",[m
+[31m-      info.hasPassword[m
+[31m-    );[m
+[31m-    console.log("[login] page text:", info.text);[m
+[31m-[m
+[32m+[m[32m  if (!email || !password) {[m
+     throw new Error([m
+[31m-      "WorkMyT login did not complete within 30 seconds."[m
+[32m+[m[32m      "WORKMYT_EMAIL or WORKMYT_PASSWORD environment variable is missing."[m
+     );[m
+   }[m
+[32m+[m[32m  await page.keyboard.press("Enter");[m
+[32m+[m
+[32m+[m[32m  await page.waitForFunction([m
+[32m+[m[32m    () => !document.querySelector('input[type="email"]'),[m
+[32m+[m[32m    {[m
+[32m+[m[32m      timeout: 30000,[m
+[32m+[m[32m    }[m
+[32m+[m[32m  );[m
+ [m
+[31m-  console.log("[login] Login completed."););[m
+[32m+[m[32m  console.log("[login] Login completed.");[m
+ }[m
+ [m
+ function normalizeWhitespace(value) {[m
+[36m@@ -1271,37 +947,12 @@[m [masync function waitForManualLogin(page) {[m
+   console.log("[auth] opening WorkMyT");[m
+   console.log("[auth] log in manually in the Chrome window");[m
+   console.log("[auth] the script will click the assessment icon after login");[m
+[31m-  [m
+[31m-  console.log("[auth] navigating to:", FIELD_DAY_URL);[m
+[31m-  [m
+[31m-  try {[m
+[31m-    const response = await page.goto(FIELD_DAY_URL, {[m
+[31m-      waitUntil: "domcontentloaded",[m
+[31m-      timeout: 30000,[m
+[31m-    });[m
+[31m-  [m
+[31m-    console.log([m
+[31m-      "[auth] navigation response:",[m
+[31m-      response ? response.status() : "no response"[m
+[31m-    );[m
+[31m-  } catch (error) {[m
+[31m-    console.log([m
+[31m-      "[auth] page.goto did not finish normally:",[m
+[31m-      error.message[m
+[31m-    );[m
+[31m-  [m
+[31m-    console.log([m
+[31m-      "[auth] continuing with currently loaded page:",[m
+[31m-      page.url()[m
+[31m-    );[m
+[31m-  }[m
+[31m-  [m
+[31m-  console.log("[auth] page navigation stage finished");[m
+[31m-  console.log("[auth] current URL:", page.url());[m
+[31m-  [m
+[32m+[m
+[32m+[m[32m  await page.goto(FIELD_DAY_URL, {[m
+[32m+[m[32m    waitUntil: "domcontentloaded",[m
+[32m+[m[32m  });[m
+[32m+[m
+   await loginIfNeeded(page);[m
+[31m-  [m
+[31m-  console.log("[auth] loginIfNeeded finished");[m
+ [m
+   await page.waitForFunction([m
+     () => {[m
+[36m@@ -1328,7 +979,7 @@[m [masync function waitForManualLogin(page) {[m
+       return alreadyOnFieldDay || Boolean(assessmentButton);[m
+     },[m
+     {[m
+[31m-      timeout: 60000,[m
+[32m+[m[32m      timeout: 0,[m
+     }[m
+   );[m
+ [m
+[36m@@ -2220,24 +1871,14 @@[m [masync function run() {[m
+     recursive: true,[m
+   });[m
+ [m
+[31m-  const isRender = Boolean(process.env.RENDER);[m
+[31m-[m
+   const browser = await puppeteer.launch({[m
+[31m-    headless: isRender ? true : false,[m
+[31m-  [m
+[31m-    ...(isRender ? {} : { executablePath: CHROME_PATH }),[m
+[31m-    ...(isRender ? {} : { userDataDir: CHROME_USER_DATA_DIR }),[m
+[31m-  [m
+[31m-    defaultViewport: isRender[m
+[31m-      ? { width: 1920, height: 1080 }[m
+[31m-      : null,[m
+[31m-  [m
+[32m+[m[32m    headless: false,[m
+[32m+[m[32m    executablePath: CHROME_PATH,[m
+[32m+[m[32m    userDataDir: CHROME_USER_DATA_DIR,[m
+[32m+[m[32m    defaultViewport: null,[m
+     args: [[m
+[31m-      "--no-sandbox",[m
+[31m-      "--disable-setuid-sandbox",[m
+[31m-      "--disable-dev-shm-usage",[m
+[32m+[m[32m      "--start-maximized",[m
+       "--disable-notifications",[m
+[31m-      "--window-size=1920,1080",[m
+     ],[m
+   });[m
+ [m
+[36m@@ -2273,13 +1914,10 @@[m [masync function run() {[m
+ [m
+     const pages = await browser.pages();[m
+     const page = pages[0] || await browser.newPage();[m
+[31m-    [m
+[32m+[m
+     page.setDefaultTimeout(30000);[m
+     page.setDefaultNavigationTimeout(60000);[m
+[31m-    [m
+[31m-    // Capture weekly FieldDay XHR/fetch traffic[m
+[31m-    attachNetworkLogger(page, "run-week-days-fix");[m
+[31m-    [m
+[32m+[m
+     await waitForManualLogin(page);[m
+ [m
+    await page.bringToFront();[m
+[1mdiff --git a/server/index.mjs b/server/index.mjs[m
+[1mindex 27c8802..bdcde58 100644[m
+[1m--- a/server/index.mjs[m
+[1m+++ b/server/index.mjs[m
+[36m@@ -4,10 +4,8 @@[m [mimport { createServer } from "node:http";[m
+ import { Server as SocketIOServer } from "socket.io";[m
+ import cors from "cors";[m
+ import crypto from "node:crypto";[m
+[31m-import cron from "node-cron";[m
+ import { getAgents, replaceAgents, getGaps, getPerformanceTabs, saveMatchups, getDraftMatchups, saveDraftMatchups, getFinalMatchups, getFieldNotes, addFieldNote, getManualNumbers, upsertManualNumbers, getSuggestions, addSuggestion, getNumbersTracking } from "./sheets.mjs";[m
+ import { combineAgentsAndGaps, generateGroups } from "./logic.mjs";[m
+[31m-import { runDailyAutomation, isDailyAutomationRunning } from "../run.mjs";[m
+ [m
+ const app = express();[m
+ [m
+[36m@@ -207,7 +205,6 @@[m [mapp.get("/api/health", (_req, res) => {[m
+   res.json({[m
+     ok: true,[m
+     status: "online",[m
+[31m-    automationRunning: isDailyAutomationRunning(),[m
+     serverTime: new Date().toISOString(),[m
+   });[m
+ });[m
+[36m@@ -531,96 +528,8 @@[m [mapp.post("/api/field-notes", requireAdmin, async (req, res, next) => {[m
+   }[m
+ });[m
+ [m
+[31m-function requireApiKey(req, res, next) {[m
+[31m-  const expected = process.env.API_SECRET_KEY;[m
+[31m-  if (!expected) return res.status(503).json({ error: "API_SECRET_KEY is not configured" });[m
+[31m-[m
+[31m-  const received = req.get("X-API-Key") || req.get("Authorization")?.replace(/^Bearer\s+/i, "");[m
+[31m-  if (!received) return res.status(401).json({ error: "Missing API key" });[m
+[31m-[m
+[31m-  const expectedBuffer = Buffer.from(expected);[m
+[31m-  const receivedBuffer = Buffer.from(received);[m
+[31m-  const valid =[m
+[31m-    expectedBuffer.length === receivedBuffer.length &&[m
+[31m-    crypto.timingSafeEqual(expectedBuffer, receivedBuffer);[m
+[31m-[m
+[31m-  if (!valid) return res.status(403).json({ error: "Invalid API key" });[m
+[31m-  next();[m
+[31m-}[m
+[31m-[m
+[31m-app.post("/api/automation/run", requireApiKey, async (_req, res, next) => {[m
+[31m-  if (isDailyAutomationRunning()) {[m
+[31m-    return res.status(409).json({ error: "Automation is already running" });[m
+[31m-  }[m
+[31m-[m
+[31m-  try {[m
+[31m-    res.json(await runDailyAutomation());[m
+[31m-  } catch (error) { next(error); }[m
+[31m-});[m
+[31m-[m
+[31m-let automationRunning = false;[m
+[31m-[m
+[31m-const dailyRunCron = process.env.DAILY_RUN_CRON || "* * * * *";[m
+[31m-const dailyRunTimezone =[m
+[31m-  process.env.DAILY_RUN_TIMEZONE || "America/New_York";[m
+[31m-[m
+[31m-console.log("==================================================");[m
+[31m-console.log("[scheduler] Scheduler initializing");[m
+[31m-console.log(`[scheduler] Cron: ${dailyRunCron}`);[m
+[31m-console.log(`[scheduler] Timezone: ${dailyRunTimezone}`);[m
+[31m-console.log(`[scheduler] Server time: ${new Date().toISOString()}`);[m
+[31m-console.log("==================================================");[m
+[31m-[m
+[31m-cron.schedule([m
+[31m-  dailyRunCron,[m
+[31m-  async () => {[m
+[31m-    const triggerTime = new Date();[m
+[31m-[m
+[31m-    console.log("");[m
+[31m-    console.log("==================================================");[m
+[31m-    console.log("[scheduler] ⏰ TRIGGER FIRED");[m
+[31m-    console.log(`[scheduler] Trigger time: ${triggerTime.toISOString()}`);[m
+[31m-    console.log(`[scheduler] automationRunning: ${automationRunning}`);[m
+[31m-    console.log([m
+[31m-      `[scheduler] run.mjs reports running: ${isDailyAutomationRunning()}`[m
+[31m-    );[m
+[31m-    console.log("==================================================");[m
+[31m-[m
+[31m-    if (automationRunning || isDailyAutomationRunning()) {[m
+[31m-      console.log([m
+[31m-        "[scheduler] ⏭️ SKIPPED - previous automation is still running."[m
+[31m-      );[m
+[31m-      return;[m
+[31m-    }[m
+[31m-[m
+[31m-    automationRunning = true;[m
+[31m-[m
+[31m-    try {[m
+[31m-      console.log("[scheduler] ▶️ Calling runDailyAutomation()...");[m
+[31m-[m
+[31m-      const result = await runDailyAutomation();[m
+[31m-[m
+[31m-      console.log("[scheduler] ✅ runDailyAutomation() resolved");[m
+[31m-      console.log("[scheduler] Result:", result);[m
+[31m-    } catch (err) {[m
+[31m-      console.error("[scheduler] ❌ AUTOMATION FAILED");[m
+[31m-      console.error("[scheduler] Error message:", err?.message);[m
+[31m-      console.error("[scheduler] Full error:", err);[m
+[31m-    } finally {[m
+[31m-      automationRunning = false;[m
+[31m-[m
+[31m-      console.log([m
+[31m-        `[scheduler] 🏁 Trigger complete at ${new Date().toISOString()}`[m
+[31m-      );[m
+[31m-      console.log("[scheduler] Ready for next trigger.");[m
+[31m-      console.log("==================================================");[m
+[31m-      console.log("");[m
+[31m-    }[m
+[31m-  },[m
+[31m-  {[m
+[31m-    timezone: dailyRunTimezone,[m
+[31m-  }[m
+[31m-);[m
+[32m+[m[32m// Browser automation intentionally runs in a separate Render service.[m
+[32m+[m[32m// This web server only serves the ATMO API / Socket.IO application.[m
+ [m
+ app.use((error, _req, res, _next) => {[m
+   console.error(error);[m
+[36m@@ -629,17 +538,6 @@[m [mapp.use((error, _req, res, _next) => {[m
+ });[m
+ [m
+ httpServer.listen(port, "0.0.0.0", () => {[m
+[31m-  console.log("");[m
+[31m-  console.log("==================================================");[m
+[31m-  console.log("[server] ✅ ATMO BACKEND IS RUNNING");[m
+[31m-  console.log(`[server] Port: ${port}`);[m
+[31m-  console.log(`[server] Started: ${new Date().toISOString()}`);[m
+[31m-  console.log(`[server] Node version: ${process.version}`);[m
+[31m-  console.log(`[server] PID: ${process.pid}`);[m
+[32m+[m[32m  console.log(`[server] ATMO API running at http://localhost:${port}`);[m
+   console.log(`[server] Allowed origins: ${allowedOrigins.join(", ")}`);[m
+[31m-  console.log(`[scheduler] Cron: ${dailyRunCron}`);[m
+[31m-  console.log(`[scheduler] Timezone: ${dailyRunTimezone}`);[m
+[31m-  console.log("[scheduler] Waiting for next trigger...");[m
+[31m-  console.log("==================================================");[m
+[31m-  console.log("");[m
+ });[m

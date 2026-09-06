@@ -1,6 +1,6 @@
 # Dependencies
 node_modules/
-.cromhe-profile/
+.chrome-profile/
 # Environment variables
 .env
 .env.*
@@ -20,6 +20,7 @@ outputs/
 user-data/
 chrome-profile/
 .cache/
+.puppeteer-cache/
 
 # Operating system/editor files
 .DS_Store
