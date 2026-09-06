@@ -86,6 +86,24 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function withHardTimeout(promise, ms, label = "operation") {
+  let timer;
+
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`${label} exceeded ${ms}ms`)),
+          ms
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 function calculateFlowRates(performance) {
   const talks =
     Number(performance.talk || 0);
@@ -205,21 +223,25 @@ async function loginIfNeeded(page) {
 
   await delay(2500);
 
-  const loginPageVisible = await page.evaluate(() => {
-    const emailInput = document.querySelector('input[type="email"]');
-    const passwordInput = document.querySelector('input[type="password"]');
+  const loginPageVisible = await withHardTimeout(
+    page.evaluate(() => {
+      const emailInput = document.querySelector('input[type="email"]');
+      const passwordInput = document.querySelector('input[type="password"]');
 
-    if (!emailInput || !passwordInput) {
-      return false;
-    }
+      if (!emailInput || !passwordInput) {
+        return false;
+      }
 
-    return (
-      emailInput.offsetWidth > 0 &&
-      emailInput.offsetHeight > 0 &&
-      passwordInput.offsetWidth > 0 &&
-      passwordInput.offsetHeight > 0
-    );
-  });
+      return (
+        emailInput.offsetWidth > 0 &&
+        emailInput.offsetHeight > 0 &&
+        passwordInput.offsetWidth > 0 &&
+        passwordInput.offsetHeight > 0
+      );
+    }),
+    5000,
+    "login form detection"
+  );
 
   if (!loginPageVisible) {
     console.log(
@@ -237,203 +259,221 @@ async function loginIfNeeded(page) {
   console.log("[login] Login page detected.");
   console.log("[login] Filling credentials...");
 
-  await page.evaluate(
-    ({ email, password }) => {
+  await withHardTimeout(
+    page.evaluate(
+      ({ email, password }) => {
+        const emailInput =
+          document.querySelector('input[type="email"]');
+
+        const passwordInput =
+          document.querySelector('input[type="password"]');
+
+        if (!emailInput || !passwordInput) {
+          throw new Error("Login inputs disappeared.");
+        }
+
+        const setNativeValue = (element, value) => {
+          const prototype = Object.getPrototypeOf(element);
+          const descriptor =
+            Object.getOwnPropertyDescriptor(prototype, "value");
+
+          if (descriptor?.set) {
+            descriptor.set.call(element, value);
+          } else {
+            element.value = value;
+          }
+
+          element.dispatchEvent(new Event("input", { bubbles: true }));
+          element.dispatchEvent(new Event("change", { bubbles: true }));
+          element.dispatchEvent(new Event("blur", { bubbles: true }));
+        };
+
+        setNativeValue(emailInput, email);
+        setNativeValue(passwordInput, password);
+      },
+      { email, password }
+    ),
+    5000,
+    "credential fill"
+  );
+
+  console.log("[login] Credentials filled.");
+  await delay(1000);
+
+  const valuesPresent = await withHardTimeout(
+    page.evaluate(() => {
       const emailInput =
         document.querySelector('input[type="email"]');
 
       const passwordInput =
         document.querySelector('input[type="password"]');
 
-      if (!emailInput || !passwordInput) {
-        throw new Error("Login inputs disappeared.");
-      }
-
-      const setNativeValue = (element, value) => {
-        const prototype = Object.getPrototypeOf(element);
-
-        const descriptor =
-          Object.getOwnPropertyDescriptor(
-            prototype,
-            "value"
-          );
-
-        if (descriptor?.set) {
-          descriptor.set.call(element, value);
-        } else {
-          element.value = value;
-        }
-
-        element.dispatchEvent(
-          new Event("input", {
-            bubbles: true,
-          })
-        );
-
-        element.dispatchEvent(
-          new Event("change", {
-            bubbles: true,
-          })
-        );
+      return {
+        emailLength: emailInput?.value?.length || 0,
+        passwordLength: passwordInput?.value?.length || 0,
       };
-
-      setNativeValue(emailInput, email);
-      setNativeValue(passwordInput, password);
-    },
-    {
-      email,
-      password,
-    }
+    }),
+    5000,
+    "credential verification"
   );
-
-  console.log("[login] Credentials filled.");
-
-  await delay(1000);
-
-  const valuesPresent = await page.evaluate(() => {
-    const emailInput =
-      document.querySelector('input[type="email"]');
-
-    const passwordInput =
-      document.querySelector('input[type="password"]');
-
-    return {
-      emailLength: emailInput?.value?.length || 0,
-      passwordLength: passwordInput?.value?.length || 0,
-    };
-  });
 
   console.log(
     `[login] Input check: email=${valuesPresent.emailLength > 0}, password=${valuesPresent.passwordLength > 0}`
   );
 
+  // Log the login workflow response if Bubble sends one.
+  const onResponse = async (response) => {
+    const url = response.url();
+
+    if (
+      url.includes("/workflow/start") ||
+      url.includes("/user/hi") ||
+      url.includes("/user/m")
+    ) {
+      console.log(
+        `[login-network] ${response.status()} ${response.request().method()} ${url}`
+      );
+    }
+  };
+
+  page.on("response", onResponse);
+
   console.log("[login] Looking for login button...");
 
-  const submitResult = await page.evaluate(() => {
-    const buttons = [
-      ...document.querySelectorAll(
-        'button, input[type="submit"], [role="button"]'
-      ),
-    ];
+  const submitResult = await withHardTimeout(
+    page.evaluate(() => {
+      const buttons = [
+        ...document.querySelectorAll(
+          'button, input[type="submit"], [role="button"]'
+        ),
+      ];
 
-    const button = buttons.find((element) => {
-      const text = (
-        element.innerText ||
-        element.value ||
-        element.textContent ||
-        ""
-      )
-        .trim()
-        .toLowerCase();
+      const button = buttons.find((element) => {
+        const text = (
+          element.innerText ||
+          element.value ||
+          element.textContent ||
+          ""
+        )
+          .trim()
+          .toLowerCase();
 
-      return (
-        text === "log in" ||
-        text === "login" ||
-        text === "sign in" ||
-        text === "signin"
-      );
-    });
+        return (
+          text === "log in" ||
+          text === "login" ||
+          text === "sign in" ||
+          text === "signin"
+        );
+      });
 
-    if (!button) {
-      return "not-found";
-    }
+      if (!button) {
+        return "not-found";
+      }
 
-    button.scrollIntoView({
-      block: "center",
-    });
+      button.scrollIntoView({ block: "center" });
+      button.click();
 
-    button.click();
-
-    return "clicked";
-  });
-
-  console.log(
-    `[login] Submit button result: ${submitResult}`
+      return "clicked";
+    }),
+    5000,
+    "login button click"
   );
+
+  console.log(`[login] Submit button result: ${submitResult}`);
 
   if (submitResult === "not-found") {
     console.log(
       "[login] Login button not found; trying Enter key."
     );
 
-    await page.focus(passwordSelector);
-    await page.keyboard.press("Enter");
+    await withHardTimeout(
+      page.focus(passwordSelector),
+      5000,
+      "password focus"
+    );
+
+    await withHardTimeout(
+      page.keyboard.press("Enter"),
+      5000,
+      "login Enter key"
+    );
   }
 
   console.log(
-    "[login] Login submitted. Waiting for form to disappear..."
+    "[login] Login submitted. Polling browser state for up to 30 seconds..."
   );
 
-  try {
-    await page.waitForFunction(
-      () => {
-        const emailInput =
-          document.querySelector('input[type="email"]');
+  const deadline = Date.now() + 30000;
+  let lastState = null;
 
-        if (!emailInput) {
-          return true;
-        }
+  while (Date.now() < deadline) {
+    await delay(2000);
 
-        const bodyText =
-          document.body?.innerText || "";
+    try {
+      const state = await withHardTimeout(
+        page.evaluate(() => {
+          const bodyText = document.body?.innerText || "";
+          const emailInput =
+            document.querySelector('input[type="email"]');
 
-        return (
-          bodyText.includes("Daily") ||
-          bodyText.includes("Campaign") ||
-          bodyText.includes("assessment")
-        );
-      },
-      {
-        timeout: 30000,
+          const passwordInput =
+            document.querySelector('input[type="password"]');
+
+          return {
+            url: location.href,
+            title: document.title,
+            emailPresent: Boolean(emailInput),
+            passwordPresent: Boolean(passwordInput),
+            bodyPreview: bodyText.slice(0, 500),
+            looksLikeFieldDay:
+              bodyText.includes("Daily") &&
+              bodyText.includes("Campaign"),
+          };
+        }),
+        5000,
+        "login state check"
+      );
+
+      lastState = state;
+
+      console.log(
+        `[login] state: emailPresent=${state.emailPresent}, passwordPresent=${state.passwordPresent}, fieldDay=${state.looksLikeFieldDay}, url=${state.url}`
+      );
+
+      if (!state.emailPresent || state.looksLikeFieldDay) {
+        page.off("response", onResponse);
+        console.log("[login] Login completed.");
+        return;
       }
-    );
-  } catch {
-    const diagnostic = await page.evaluate(() => {
-      return {
-        url: location.href,
-        title: document.title,
-        bodyText:
-          document.body?.innerText
-            ?.slice(0, 1000) || "",
-        emailStillPresent:
-          Boolean(
-            document.querySelector(
-              'input[type="email"]'
-            )
-          ),
-      };
-    });
+    } catch (error) {
+      console.error(
+        `[login] State check failed: ${error?.message || error}`
+      );
+    }
+  }
 
-    console.error(
-      "[login] Login did not complete within 30 seconds."
-    );
+  page.off("response", onResponse);
 
-    console.error(
-      "[login] Current URL:",
-      diagnostic.url
-    );
+  console.error("[login] Login did not complete within 30 seconds.");
 
-    console.error(
-      "[login] Page title:",
-      diagnostic.title
-    );
-
+  if (lastState) {
+    console.error("[login] Current URL:", lastState.url);
+    console.error("[login] Page title:", lastState.title);
     console.error(
       "[login] Email form still present:",
-      diagnostic.emailStillPresent
+      lastState.emailPresent
     );
-
     console.error(
       "[login] Visible page text:",
-      diagnostic.bodyText
+      lastState.bodyPreview
     );
-
-    throw new Error(
-      "WorkMyT login did not complete."
+  } else {
+    console.error(
+      "[login] Could not retrieve browser state after submit."
     );
   }
 
-  console.log("[login] Login completed.");
+  throw new Error("WorkMyT login did not complete.");
 }
 
 function normalizeWhitespace(value) {
@@ -931,8 +971,8 @@ async function writeOutputToGoogleSheet(output) {
 
 async function waitForManualLogin(page) {
   console.log("[auth] opening WorkMyT");
-  console.log("[auth] log in manually in the Chrome window");
-  console.log("[auth] the script will click the assessment icon after login");
+  console.log("[auth] checking WorkMyT authentication");
+  console.log("[auth] will log in automatically if needed");
 
   await page.goto(FIELD_DAY_URL, {
     waitUntil: "domcontentloaded",
