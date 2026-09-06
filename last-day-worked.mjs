@@ -940,34 +940,51 @@ async function waitForManualLogin(page) {
 
   await loginIfNeeded(page);
 
-  await page.waitForFunction(
-    () => {
-      const bodyText = document.body?.innerText || "";
+  console.log("[auth] waiting for FieldDay or assessment button...");
 
-      const alreadyOnFieldDay =
-        bodyText.includes("Daily") &&
-        bodyText.includes("Campaign") &&
-        bodyText.includes("Rep Name");
+  try {
+    await page.waitForFunction(
+      () => {
+        const bodyText = document.body?.innerText || "";
 
-      const assessmentButton = [
-        ...document.querySelectorAll(
-          "button.bubble-element.materialicons-Materialicon"
-        ),
-      ]
-        .find((button) => {
+        const alreadyOnFieldDay =
+          bodyText.includes("Daily") &&
+          bodyText.includes("Campaign");
+
+        const assessmentButton = [
+          ...document.querySelectorAll(
+            "button.bubble-element.materialicons-Materialicon"
+          ),
+        ].find((button) => {
           const iconText = button.querySelector(
-            "text.material-icons-outline"
+            ".material-icons-outline"
           )?.textContent?.trim().toLowerCase();
 
           return iconText === "assessment";
         });
 
-      return alreadyOnFieldDay || Boolean(assessmentButton);
-    },
-    {
-      timeout: 0,
-    }
-  );
+        return alreadyOnFieldDay || Boolean(assessmentButton);
+      },
+      {
+        timeout: 30000,
+      }
+    );
+  } catch {
+    const state = await page.evaluate(() => ({
+      url: location.href,
+      title: document.title,
+      bodyText: (document.body?.innerText || "").slice(0, 1500),
+    }));
+
+    console.error("[auth] FieldDay wait timed out.");
+    console.error("[auth] URL:", state.url);
+    console.error("[auth] Title:", state.title);
+    console.error("[auth] Visible text:", state.bodyText);
+
+    throw new Error(
+      "Timed out waiting for FieldDay after login."
+    );
+  }
 
   const navigationResult = await page.evaluate(async() => {
     const bodyText = document.body?.innerText || "";
@@ -988,7 +1005,7 @@ async function waitForManualLogin(page) {
     ]
       .find((button) => {
         const iconText = button.querySelector(
-          "text.material-icons-outline"
+          ".material-icons-outline"
         )?.textContent?.trim().toLowerCase();
 
         return iconText === "assessment";
