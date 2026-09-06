@@ -203,33 +203,28 @@ async function loginIfNeeded(page) {
   const emailSelector = 'input[type="email"]';
   const passwordSelector = 'input[type="password"]';
 
-  // Login is conditional. If the saved/remote browser session is already
-  // authenticated, the form will not be present and we continue immediately.
   await delay(2500);
 
   const loginPageVisible = await page.evaluate(() => {
-    const emailInput =
-      document.querySelector('input[type="email"]');
-    const passwordInput =
-      document.querySelector('input[type="password"]');
+    const emailInput = document.querySelector('input[type="email"]');
+    const passwordInput = document.querySelector('input[type="password"]');
 
     if (!emailInput || !passwordInput) {
       return false;
     }
 
-    const emailVisible =
+    return (
       emailInput.offsetWidth > 0 &&
-      emailInput.offsetHeight > 0;
-
-    const passwordVisible =
+      emailInput.offsetHeight > 0 &&
       passwordInput.offsetWidth > 0 &&
-      passwordInput.offsetHeight > 0;
-
-    return emailVisible && passwordVisible;
+      passwordInput.offsetHeight > 0
+    );
   });
 
   if (!loginPageVisible) {
-    console.log("[login] Login form not visible; continuing with existing session.");
+    console.log(
+      "[login] Login form not visible; continuing with existing session."
+    );
     return;
   }
 
@@ -240,25 +235,203 @@ async function loginIfNeeded(page) {
   }
 
   console.log("[login] Login page detected.");
+  console.log("[login] Filling credentials...");
 
-  await page.click(emailSelector, { clickCount: 3 });
-  await page.type(emailSelector, email, {
-    delay: 30,
-  });
+  await page.evaluate(
+    ({ email, password }) => {
+      const emailInput =
+        document.querySelector('input[type="email"]');
 
-  await page.click(passwordSelector, { clickCount: 3 });
-  await page.type(passwordSelector, password, {
-    delay: 30,
-  });
+      const passwordInput =
+        document.querySelector('input[type="password"]');
 
-  await page.keyboard.press("Enter");
+      if (!emailInput || !passwordInput) {
+        throw new Error("Login inputs disappeared.");
+      }
 
-  await page.waitForFunction(
-    () => !document.querySelector('input[type="email"]'),
+      const setNativeValue = (element, value) => {
+        const prototype = Object.getPrototypeOf(element);
+
+        const descriptor =
+          Object.getOwnPropertyDescriptor(
+            prototype,
+            "value"
+          );
+
+        if (descriptor?.set) {
+          descriptor.set.call(element, value);
+        } else {
+          element.value = value;
+        }
+
+        element.dispatchEvent(
+          new Event("input", {
+            bubbles: true,
+          })
+        );
+
+        element.dispatchEvent(
+          new Event("change", {
+            bubbles: true,
+          })
+        );
+      };
+
+      setNativeValue(emailInput, email);
+      setNativeValue(passwordInput, password);
+    },
     {
-      timeout: 30000,
+      email,
+      password,
     }
   );
+
+  console.log("[login] Credentials filled.");
+
+  await delay(1000);
+
+  const valuesPresent = await page.evaluate(() => {
+    const emailInput =
+      document.querySelector('input[type="email"]');
+
+    const passwordInput =
+      document.querySelector('input[type="password"]');
+
+    return {
+      emailLength: emailInput?.value?.length || 0,
+      passwordLength: passwordInput?.value?.length || 0,
+    };
+  });
+
+  console.log(
+    `[login] Input check: email=${valuesPresent.emailLength > 0}, password=${valuesPresent.passwordLength > 0}`
+  );
+
+  console.log("[login] Looking for login button...");
+
+  const submitResult = await page.evaluate(() => {
+    const buttons = [
+      ...document.querySelectorAll(
+        'button, input[type="submit"], [role="button"]'
+      ),
+    ];
+
+    const button = buttons.find((element) => {
+      const text = (
+        element.innerText ||
+        element.value ||
+        element.textContent ||
+        ""
+      )
+        .trim()
+        .toLowerCase();
+
+      return (
+        text === "log in" ||
+        text === "login" ||
+        text === "sign in" ||
+        text === "signin"
+      );
+    });
+
+    if (!button) {
+      return "not-found";
+    }
+
+    button.scrollIntoView({
+      block: "center",
+    });
+
+    button.click();
+
+    return "clicked";
+  });
+
+  console.log(
+    `[login] Submit button result: ${submitResult}`
+  );
+
+  if (submitResult === "not-found") {
+    console.log(
+      "[login] Login button not found; trying Enter key."
+    );
+
+    await page.focus(passwordSelector);
+    await page.keyboard.press("Enter");
+  }
+
+  console.log(
+    "[login] Login submitted. Waiting for form to disappear..."
+  );
+
+  try {
+    await page.waitForFunction(
+      () => {
+        const emailInput =
+          document.querySelector('input[type="email"]');
+
+        if (!emailInput) {
+          return true;
+        }
+
+        const bodyText =
+          document.body?.innerText || "";
+
+        return (
+          bodyText.includes("Daily") ||
+          bodyText.includes("Campaign") ||
+          bodyText.includes("assessment")
+        );
+      },
+      {
+        timeout: 30000,
+      }
+    );
+  } catch {
+    const diagnostic = await page.evaluate(() => {
+      return {
+        url: location.href,
+        title: document.title,
+        bodyText:
+          document.body?.innerText
+            ?.slice(0, 1000) || "",
+        emailStillPresent:
+          Boolean(
+            document.querySelector(
+              'input[type="email"]'
+            )
+          ),
+      };
+    });
+
+    console.error(
+      "[login] Login did not complete within 30 seconds."
+    );
+
+    console.error(
+      "[login] Current URL:",
+      diagnostic.url
+    );
+
+    console.error(
+      "[login] Page title:",
+      diagnostic.title
+    );
+
+    console.error(
+      "[login] Email form still present:",
+      diagnostic.emailStillPresent
+    );
+
+    console.error(
+      "[login] Visible page text:",
+      diagnostic.bodyText
+    );
+
+    throw new Error(
+      "WorkMyT login did not complete."
+    );
+  }
 
   console.log("[login] Login completed.");
 }
