@@ -679,114 +679,149 @@ async function loginIfNeeded(page) {
     loggedInInfo.text
   );
   
-  console.log("[login] Login completed.");
-  
-  try {
-    await page.waitForFunction(
-      () => {
-        const email =
-          document.querySelector(
-            'input[type="email"]'
-          );
-  
-        const password =
-          document.querySelector(
-            'input[type="password"]'
-          );
-  
-        const text =
-          document.body?.innerText || "";
-  
-        return (
-          (!email && !password) ||
-          text.includes("Daily") ||
-          text.includes("Campaign") ||
-          text.includes("Rep Name")
-        );
-      },
-      {
-        timeout: 30000,
-        polling: 500,
-      }
-    );
-  
-    console.log(
-      "[login] login page changed successfully"
-    );
-  
-    const loggedInInfo =
-      await page.evaluate(() => ({
-        url: location.href,
-        title: document.title,
-        text: (
-          document.body?.innerText || ""
-        ).slice(0, 2000),
-      }));
-  
-    console.log(
-      "[login] SUCCESS URL:",
-      loggedInInfo.url
-    );
-  
-    console.log(
-      "[login] SUCCESS title:",
-      loggedInInfo.title
-    );
-  
-    console.log(
-      "[login] SUCCESS page text:",
-      loggedInInfo.text
-    );
-  } catch (error) {
-    const info = await page.evaluate(() => ({
-      url: location.href,
-      title: document.title,
-  
-      text: (
-        document.body?.innerText || ""
-      ).slice(0, 3000),
-  
-      hasEmail: Boolean(
+  console.log(
+  "[login] workflow returned; waiting for auth state"
+);
+
+try {
+  await page.waitForFunction(
+    () => {
+      const email =
         document.querySelector(
           'input[type="email"]'
-        )
-      ),
-  
-      hasPassword: Boolean(
+        );
+
+      const password =
         document.querySelector(
           'input[type="password"]'
-        )
-      ),
-    }));
-  
-    console.log(
-      "[login] login page did not change"
-    );
-  
-    console.log("[login] URL:", info.url);
-    console.log("[login] title:", info.title);
-  
-    console.log(
-      "[login] email still visible:",
-      info.hasEmail
-    );
-  
-    console.log(
-      "[login] password still visible:",
-      info.hasPassword
-    );
-  
-    console.log(
-      "[login] current page text:",
-      info.text
-    );
-  
-    throw new Error(
-      "WorkMyT returned the login workflow response but the browser remained on the login page."
-    );
-  }
+        );
 
-  console.log("[login] Login completed.");
+      const text =
+        document.body?.innerText || "";
+
+      const url = location.href;
+
+      const loginInputsGone =
+        !email && !password;
+
+      const fieldDayText =
+        text.includes("Daily") ||
+        text.includes("Campaign") ||
+        text.includes("Rep Name") ||
+        text.includes("Assessment");
+
+      const urlChanged =
+        !url.endsWith("workmyt.com/");
+
+      return (
+        loginInputsGone ||
+        fieldDayText ||
+        urlChanged
+      );
+    },
+    {
+      timeout: 15000,
+      polling: 500,
+    }
+  );
+
+  console.log(
+    "[login] authentication state changed"
+  );
+} catch {
+  console.log(
+    "[login] auth state did not visibly change after 15 seconds"
+  );
+}
+
+const authInfo = await page.evaluate(() => ({
+  url: location.href,
+
+  title: document.title,
+
+  text: (
+    document.body?.innerText || ""
+  ).slice(0, 4000),
+
+  emailVisible: Boolean(
+    document.querySelector(
+      'input[type="email"]'
+    )
+  ),
+
+  passwordVisible: Boolean(
+    document.querySelector(
+      'input[type="password"]'
+    )
+  ),
+
+  inputs: Array.from(
+    document.querySelectorAll("input")
+  ).map((input) => ({
+    type: input.type,
+    placeholder: input.placeholder,
+    visible:
+      input.offsetWidth > 0 &&
+      input.offsetHeight > 0,
+  })),
+
+  buttons: Array.from(
+    document.querySelectorAll(
+      'button,[role="button"]'
+    )
+  )
+    .map((el) =>
+      (el.innerText || "").trim()
+    )
+    .filter(Boolean)
+    .slice(0, 50),
+}));
+
+console.log(
+  "[login] POST-LOGIN URL:",
+  authInfo.url
+);
+
+console.log(
+  "[login] POST-LOGIN title:",
+  authInfo.title
+);
+
+console.log(
+  "[login] email visible:",
+  authInfo.emailVisible
+);
+
+console.log(
+  "[login] password visible:",
+  authInfo.passwordVisible
+);
+
+console.log(
+  "[login] visible inputs:",
+  JSON.stringify(authInfo.inputs)
+);
+
+console.log(
+  "[login] visible buttons:",
+  JSON.stringify(authInfo.buttons)
+);
+
+console.log(
+  "[login] POST-LOGIN page text:",
+  authInfo.text
+);
+
+if (
+  authInfo.emailVisible &&
+  authInfo.passwordVisible
+) {
+  throw new Error(
+    "WorkMyT login workflow returned 200, but login inputs are still visible."
+  );
+}
+
+console.log("[login] Login completed.");
 }
 function normalizeWhitespace(value) {
   return String(value || "")
