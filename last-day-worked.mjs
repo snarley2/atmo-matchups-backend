@@ -550,7 +550,7 @@ async function loginIfNeeded(page) {
 
  console.log("[login] credentials entered; submitting");
 
-  const loginResponsePromise = page.waitForResponse(
+  const workflowResponsePromise = page.waitForResponse(
     (response) =>
       response.url().includes("/workflow/start") &&
       response.request().method() === "POST",
@@ -563,58 +563,121 @@ async function loginIfNeeded(page) {
   
   console.log("[login] submit sent to WorkMyT");
   
-  let loginResponse;
+  const workflowResponse =
+    await workflowResponsePromise;
+  
+  console.log(
+    "[login] workflow response status:",
+    workflowResponse.status()
+  );
+  
+  console.log(
+    "[login] workflow returned; waiting for page to update"
+  );
   
   try {
-    loginResponse = await loginResponsePromise;
+    await page.waitForFunction(
+      () => {
+        const email =
+          document.querySelector(
+            'input[type="email"]'
+          );
+  
+        const password =
+          document.querySelector(
+            'input[type="password"]'
+          );
+  
+        const text =
+          document.body?.innerText || "";
+  
+        return (
+          (!email && !password) ||
+          text.includes("Daily") ||
+          text.includes("Campaign") ||
+          text.includes("Rep Name")
+        );
+      },
+      {
+        timeout: 30000,
+        polling: 500,
+      }
+    );
+  } catch {
+    const info = await page.evaluate(() => ({
+      url: location.href,
+      title: document.title,
+      text: (
+        document.body?.innerText || ""
+      ).slice(0, 3000),
+  
+      hasEmail: Boolean(
+        document.querySelector(
+          'input[type="email"]'
+        )
+      ),
+  
+      hasPassword: Boolean(
+        document.querySelector(
+          'input[type="password"]'
+        )
+      ),
+    }));
   
     console.log(
-      "[login] workflow response status:",
-      loginResponse.status()
+      "[login] page did not update after workflow response"
+    );
+  
+    console.log("[login] URL:", info.url);
+    console.log("[login] title:", info.title);
+  
+    console.log(
+      "[login] email still visible:",
+      info.hasEmail
     );
   
     console.log(
-      "[login] workflow response URL:",
-      loginResponse.url()
+      "[login] password still visible:",
+      info.hasPassword
     );
   
-    try {
-      const body = await Promise.race([
-        loginResponse.text(),
-  
-        new Promise((_, reject) =>
-          setTimeout(
-            () =>
-              reject(
-                new Error(
-                  "workflow response body timed out"
-                )
-              ),
-            15000
-          )
-        ),
-      ]);
-  
-      console.log(
-        "[login] workflow response body:",
-        redactSensitive(body).slice(0, 10000)
-      );
-    } catch (error) {
-      console.log(
-        "[login] could not read workflow body:",
-        error?.message || error
-      );
-    }
-  } catch (error) {
     console.log(
-      "[login] workflow response was not received:",
-      error?.message || error
+      "[login] page text:",
+      info.text
     );
   
     throw new Error(
-      "WorkMyT did not return a login workflow response."
+      "WorkMyT login workflow returned but the login page did not change."
     );
   }
+  
+  const loggedInInfo =
+    await page.evaluate(() => ({
+      url: location.href,
+      title: document.title,
+      text: (
+        document.body?.innerText || ""
+      ).slice(0, 2000),
+    }));
+  
+  console.log(
+    "[login] login page changed successfully"
+  );
+  
+  console.log(
+    "[login] SUCCESS URL:",
+    loggedInInfo.url
+  );
+  
+  console.log(
+    "[login] SUCCESS title:",
+    loggedInInfo.title
+  );
+  
+  console.log(
+    "[login] SUCCESS page text:",
+    loggedInInfo.text
+  );
   
   console.log("[login] Login completed.");
   
