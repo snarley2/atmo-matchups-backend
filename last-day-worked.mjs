@@ -201,25 +201,22 @@ function attachNetworkLogger(page, scriptName = "workmyt") {
     }
   });
 
-page.on("response", async (response) => {
-  if (shouldSkipNetworkLog(response.url())) return;
-
-  try {
-    const request = response.request();
-
+  page.on("response", async (response) => {
+    if (shouldSkipNetworkLog(response.url())) return;
+  
+    try {
       const request = response.request();
       const type = request.resourceType();
-
+  
       if (type !== "xhr" && type !== "fetch") {
         return;
       }
-
+  
       const url = safeNetworkUrl(response.url());
-
       const headers = response.headers();
       const contentType =
         headers["content-type"] || "";
-
+  
       console.log("");
       console.log(
         `========== NETWORK RESPONSE [${scriptName}] ==========`
@@ -228,7 +225,7 @@ page.on("response", async (response) => {
       console.log("TYPE:", type);
       console.log("URL:", url);
       console.log("CONTENT-TYPE:", contentType);
-
+  
       console.log(
         "======================================================"
       );
