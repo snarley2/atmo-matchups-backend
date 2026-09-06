@@ -583,6 +583,15 @@ async function loginIfNeeded(page) {
     );
 
     console.log("[login] login page changed successfully");
+    const loggedInInfo = await page.evaluate(() => ({
+      url: location.href,
+      title: document.title,
+      text: (document.body?.innerText || "").slice(0, 2000),
+    }));
+    
+    console.log("[login] SUCCESS URL:", loggedInInfo.url);
+    console.log("[login] SUCCESS title:", loggedInInfo.title);
+    console.log("[login] SUCCESS page text:", loggedInInfo.text);
   } catch {
     const info = await page.evaluate(() => ({
       url: location.href,
@@ -1148,8 +1157,8 @@ async function waitForManualLogin(page) {
   console.log("[auth] current URL:", page.url());
   
   await loginIfNeeded(page);
-
   console.log("[auth] loginIfNeeded finished");
+  console.log("[auth] URL after login:", page.url());
 
   await page.waitForFunction(
     () => {
