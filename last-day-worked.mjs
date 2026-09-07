@@ -321,7 +321,11 @@ async function loginIfNeeded(page) {
     `[login] Input check: email=${valuesPresent.emailLength > 0}, password=${valuesPresent.passwordLength > 0}`
   );
 
-  // Log the login workflow response if Bubble sends one.
+  // Log Bubble auth-related responses and explicitly wait for the
+  // login workflow. The previous version polled page.evaluate() after the
+  // workflow response; on Browserless the Bubble page can wedge its main
+  // thread during that transition. Instead, wait at the network layer and
+  // then reload FieldDay using the authenticated session/cookies.
   const onResponse = async (response) => {
     const url = response.url();
 
@@ -337,6 +341,13 @@ async function loginIfNeeded(page) {
   };
 
   page.on("response", onResponse);
+
+  const workflowResponsePromise = page.waitForResponse(
+    (response) =>
+      response.url().includes("/workflow/start") &&
+      response.request().method() === "POST",
+    { timeout: 30000 }
+  );
 
   console.log("[login] Looking for login button...");
 
@@ -366,13 +377,10 @@ async function loginIfNeeded(page) {
         );
       });
 
-      if (!button) {
-        return "not-found";
-      }
+      if (!button) return "not-found";
 
       button.scrollIntoView({ block: "center" });
       button.click();
-
       return "clicked";
     }),
     5000,
@@ -382,9 +390,7 @@ async function loginIfNeeded(page) {
   console.log(`[login] Submit button result: ${submitResult}`);
 
   if (submitResult === "not-found") {
-    console.log(
-      "[login] Login button not found; trying Enter key."
-    );
+    console.log("[login] Login button not found; trying Enter key.");
 
     await withHardTimeout(
       page.focus(passwordSelector),
@@ -399,81 +405,120 @@ async function loginIfNeeded(page) {
     );
   }
 
+  console.log("[login] Login submitted. Waiting for Bubble workflow response...");
+
+  let workflowResponse;
+  try {
+    workflowResponse = await withHardTimeout(
+      workflowResponsePromise,
+      32000,
+      "Bubble login workflow response"
+    );
+  } catch (error) {
+    page.off("response", onResponse);
+    throw new Error(
+      `No Bubble login workflow response received: ${error?.message || error}`
+    );
+  }
+
   console.log(
-    "[login] Login submitted. Polling browser state for up to 30 seconds..."
+    `[login] Bubble workflow returned HTTP ${workflowResponse.status()}`
   );
 
-  const deadline = Date.now() + 30000;
-  let lastState = null;
+  // Try to print a small, non-secret diagnostic from Bubble's response.
+  try {
+    const responseText = await withHardTimeout(
+      workflowResponse.text(),
+      5000,
+      "Bubble workflow response body"
+    );
 
-  while (Date.now() < deadline) {
-    await delay(2000);
-
-    try {
-      const state = await withHardTimeout(
-        page.evaluate(() => {
-          const bodyText = document.body?.innerText || "";
-          const emailInput =
-            document.querySelector('input[type="email"]');
-
-          const passwordInput =
-            document.querySelector('input[type="password"]');
-
-          return {
-            url: location.href,
-            title: document.title,
-            emailPresent: Boolean(emailInput),
-            passwordPresent: Boolean(passwordInput),
-            bodyPreview: bodyText.slice(0, 500),
-            looksLikeFieldDay:
-              bodyText.includes("Daily") &&
-              bodyText.includes("Campaign"),
-          };
-        }),
-        5000,
-        "login state check"
-      );
-
-      lastState = state;
-
-      console.log(
-        `[login] state: emailPresent=${state.emailPresent}, passwordPresent=${state.passwordPresent}, fieldDay=${state.looksLikeFieldDay}, url=${state.url}`
-      );
-
-      if (!state.emailPresent || state.looksLikeFieldDay) {
-        page.off("response", onResponse);
-        console.log("[login] Login completed.");
-        return;
-      }
-    } catch (error) {
-      console.error(
-        `[login] State check failed: ${error?.message || error}`
-      );
+    if (responseText) {
+      const safePreview = responseText
+        .replace(/\s+/g, " ")
+        .slice(0, 500);
+      console.log(`[login] Bubble response preview: ${safePreview}`);
     }
-  }
-
-  page.off("response", onResponse);
-
-  console.error("[login] Login did not complete within 30 seconds.");
-
-  if (lastState) {
-    console.error("[login] Current URL:", lastState.url);
-    console.error("[login] Page title:", lastState.title);
-    console.error(
-      "[login] Email form still present:",
-      lastState.emailPresent
-    );
-    console.error(
-      "[login] Visible page text:",
-      lastState.bodyPreview
-    );
-  } else {
-    console.error(
-      "[login] Could not retrieve browser state after submit."
+  } catch (error) {
+    console.log(
+      `[login] Could not read Bubble response body: ${error?.message || error}`
     );
   }
 
-  throw new Error("WorkMyT login did not complete.");
+  if (workflowResponse.status() < 200 || workflowResponse.status() >= 300) {
+    page.off("response", onResponse);
+    throw new Error(
+      `WorkMyT login workflow returned HTTP ${workflowResponse.status()}.`
+    );
+  }
+
+  // The Browserless renderer has been hanging immediately after Bubble's
+  // login workflow completes. Do not keep evaluating the transitioning page.
+  // Give Bubble a moment to commit auth state, then force a clean navigation
+  // back to FieldDay so the new page uses the authenticated cookies/session.
+  await delay(1500);
+  console.log("[login] Workflow succeeded; reopening FieldDay with current session...");
+
+  try {
+    await withHardTimeout(
+      page.goto(FIELD_DAY_URL, {
+        waitUntil: "domcontentloaded",
+        timeout: 30000,
+      }),
+      35000,
+      "post-login FieldDay navigation"
+    );
+  } catch (error) {
+    page.off("response", onResponse);
+    throw new Error(
+      `Could not reopen FieldDay after login: ${error?.message || error}`
+    );
+  }
+
+  console.log(`[login] Post-login URL: ${page.url()}`);
+  await delay(2500);
+
+  let state;
+  try {
+    state = await withHardTimeout(
+      page.evaluate(() => {
+        const bodyText = document.body?.innerText || "";
+        return {
+          url: location.href,
+          title: document.title,
+          emailPresent: Boolean(
+            document.querySelector('input[type="email"]')
+          ),
+          passwordPresent: Boolean(
+            document.querySelector('input[type="password"]')
+          ),
+          looksLikeFieldDay:
+            bodyText.includes("Daily") &&
+            bodyText.includes("Campaign"),
+          bodyPreview: bodyText.slice(0, 700),
+        };
+      }),
+      7000,
+      "post-login authentication check"
+    );
+  } finally {
+    page.off("response", onResponse);
+  }
+
+  console.log(
+    `[login] Post-login state: emailPresent=${state.emailPresent}, passwordPresent=${state.passwordPresent}, fieldDay=${state.looksLikeFieldDay}, url=${state.url}`
+  );
+
+  if (state.emailPresent || state.passwordPresent) {
+    console.error("[login] Login form is still present after workflow + reload.");
+    console.error("[login] Visible page text:", state.bodyPreview);
+    throw new Error(
+      "WorkMyT login workflow returned successfully, but the session is still unauthenticated."
+    );
+  }
+
+  console.log("[login] Login completed and authenticated session confirmed.");
+
 }
 
 function normalizeWhitespace(value) {
