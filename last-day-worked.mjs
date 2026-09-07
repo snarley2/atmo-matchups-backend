@@ -223,30 +223,24 @@ async function loginIfNeeded(page) {
 
   await delay(2500);
 
-  const loginPageVisible = await withHardTimeout(
-    page.evaluate(() => {
-      const emailInput = document.querySelector('input[type="email"]');
-      const passwordInput = document.querySelector('input[type="password"]');
+  const loginVisible = await page.evaluate(() => {
+    const emailInput = document.querySelector('input[type="email"]');
+    const passwordInput = document.querySelector('input[type="password"]');
 
-      if (!emailInput || !passwordInput) {
-        return false;
-      }
+    if (!emailInput || !passwordInput) {
+      return false;
+    }
 
-      return (
-        emailInput.offsetWidth > 0 &&
-        emailInput.offsetHeight > 0 &&
-        passwordInput.offsetWidth > 0 &&
-        passwordInput.offsetHeight > 0
-      );
-    }),
-    5000,
-    "login form detection"
-  );
-
-  if (!loginPageVisible) {
-    console.log(
-      "[login] Login form not visible; continuing with existing session."
+    return (
+      emailInput.offsetWidth > 0 &&
+      emailInput.offsetHeight > 0 &&
+      passwordInput.offsetWidth > 0 &&
+      passwordInput.offsetHeight > 0
     );
+  });
+
+  if (!loginVisible) {
+    console.log("[login] Already authenticated.");
     return;
   }
 
@@ -257,268 +251,71 @@ async function loginIfNeeded(page) {
   }
 
   console.log("[login] Login page detected.");
-  console.log("[login] Filling credentials...");
+  console.log("[login] Entering credentials...");
 
-  await withHardTimeout(
-    page.evaluate(
-      ({ email, password }) => {
-        const emailInput =
-          document.querySelector('input[type="email"]');
+  await page.click(emailSelector, {
+    clickCount: 3,
+  });
 
-        const passwordInput =
-          document.querySelector('input[type="password"]');
+  await page.type(emailSelector, email, {
+    delay: 50,
+  });
 
-        if (!emailInput || !passwordInput) {
-          throw new Error("Login inputs disappeared.");
-        }
+  await page.click(passwordSelector, {
+    clickCount: 3,
+  });
 
-        const setNativeValue = (element, value) => {
-          const prototype = Object.getPrototypeOf(element);
-          const descriptor =
-            Object.getOwnPropertyDescriptor(prototype, "value");
+  await page.type(passwordSelector, password, {
+    delay: 50,
+  });
 
-          if (descriptor?.set) {
-            descriptor.set.call(element, value);
-          } else {
-            element.value = value;
-          }
+  console.log("[login] Credentials entered.");
+  console.log("[login] Pressing Enter...");
 
-          element.dispatchEvent(new Event("input", { bubbles: true }));
-          element.dispatchEvent(new Event("change", { bubbles: true }));
-          element.dispatchEvent(new Event("blur", { bubbles: true }));
-        };
+  await page.focus(passwordSelector);
+  await page.keyboard.press("Enter");
 
-        setNativeValue(emailInput, email);
-        setNativeValue(passwordInput, password);
-      },
-      { email, password }
-    ),
-    5000,
-    "credential fill"
-  );
+  console.log("[login] Waiting for normal browser login...");
 
-  console.log("[login] Credentials filled.");
-  await delay(1000);
+  await delay(5000);
 
-  const valuesPresent = await withHardTimeout(
-    page.evaluate(() => {
+  await page.waitForFunction(
+    () => {
       const emailInput =
         document.querySelector('input[type="email"]');
 
       const passwordInput =
         document.querySelector('input[type="password"]');
 
-      return {
-        emailLength: emailInput?.value?.length || 0,
-        passwordLength: passwordInput?.value?.length || 0,
-      };
-    }),
-    5000,
-    "credential verification"
-  );
+      const text =
+        document.body?.innerText || "";
 
-  console.log(
-    `[login] Input check: email=${valuesPresent.emailLength > 0}, password=${valuesPresent.passwordLength > 0}`
-  );
+      const assessmentFound = [
+        ...document.querySelectorAll("button"),
+      ].some((button) => {
+        const buttonText =
+          button.innerText ||
+          button.textContent ||
+          "";
 
-  // Log Bubble auth-related responses and explicitly wait for the
-  // login workflow. The previous version polled page.evaluate() after the
-  // workflow response; on Browserless the Bubble page can wedge its main
-  // thread during that transition. Instead, wait at the network layer and
-  // then reload FieldDay using the authenticated session/cookies.
-  const onResponse = async (response) => {
-    const url = response.url();
-
-    if (
-      url.includes("/workflow/start") ||
-      url.includes("/user/hi") ||
-      url.includes("/user/m")
-    ) {
-      console.log(
-        `[login-network] ${response.status()} ${response.request().method()} ${url}`
-      );
-    }
-  };
-
-  page.on("response", onResponse);
-
-  const workflowResponsePromise = page.waitForResponse(
-    (response) =>
-      response.url().includes("/workflow/start") &&
-      response.request().method() === "POST",
-    { timeout: 30000 }
-  );
-
-  console.log("[login] Looking for login button...");
-
-  const submitResult = await withHardTimeout(
-    page.evaluate(() => {
-      const buttons = [
-        ...document.querySelectorAll(
-          'button, input[type="submit"], [role="button"]'
-        ),
-      ];
-
-      const button = buttons.find((element) => {
-        const text = (
-          element.innerText ||
-          element.value ||
-          element.textContent ||
-          ""
-        )
-          .trim()
-          .toLowerCase();
-
-        return (
-          text === "log in" ||
-          text === "login" ||
-          text === "sign in" ||
-          text === "signin"
-        );
+        return buttonText
+          .toLowerCase()
+          .includes("assessment");
       });
 
-      if (!button) return "not-found";
-
-      button.scrollIntoView({ block: "center" });
-      button.click();
-      return "clicked";
-    }),
-    5000,
-    "login button click"
-  );
-
-  console.log(`[login] Submit button result: ${submitResult}`);
-
-  if (submitResult === "not-found") {
-    console.log("[login] Login button not found; trying Enter key.");
-
-    await withHardTimeout(
-      page.focus(passwordSelector),
-      5000,
-      "password focus"
-    );
-
-    await withHardTimeout(
-      page.keyboard.press("Enter"),
-      5000,
-      "login Enter key"
-    );
-  }
-
-  console.log("[login] Login submitted. Waiting for Bubble workflow response...");
-
-  let workflowResponse;
-  try {
-    workflowResponse = await withHardTimeout(
-      workflowResponsePromise,
-      32000,
-      "Bubble login workflow response"
-    );
-  } catch (error) {
-    page.off("response", onResponse);
-    throw new Error(
-      `No Bubble login workflow response received: ${error?.message || error}`
-    );
-  }
-
-  console.log(
-    `[login] Bubble workflow returned HTTP ${workflowResponse.status()}`
-  );
-
-  // Try to print a small, non-secret diagnostic from Bubble's response.
-  try {
-    const responseText = await withHardTimeout(
-      workflowResponse.text(),
-      5000,
-      "Bubble workflow response body"
-    );
-
-    if (responseText) {
-      const safePreview = responseText
-        .replace(/\s+/g, " ")
-        .slice(0, 500);
-      console.log(`[login] Bubble response preview: ${safePreview}`);
+      return (
+        (!emailInput && !passwordInput) ||
+        assessmentFound ||
+        text.includes("Daily") ||
+        text.includes("Campaign")
+      );
+    },
+    {
+      timeout: 45000,
     }
-  } catch (error) {
-    console.log(
-      `[login] Could not read Bubble response body: ${error?.message || error}`
-    );
-  }
-
-  if (workflowResponse.status() < 200 || workflowResponse.status() >= 300) {
-    page.off("response", onResponse);
-    throw new Error(
-      `WorkMyT login workflow returned HTTP ${workflowResponse.status()}.`
-    );
-  }
-
-  // The Browserless renderer has been hanging immediately after Bubble's
-  // login workflow completes. Do not keep evaluating the transitioning page.
-  // Give Bubble a moment to commit auth state, then force a clean navigation
-  // back to FieldDay so the new page uses the authenticated cookies/session.
-  await delay(1500);
-  console.log("[login] Workflow succeeded; reopening FieldDay with current session...");
-
-  try {
-    await withHardTimeout(
-      page.goto(FIELD_DAY_URL, {
-        waitUntil: "domcontentloaded",
-        timeout: 30000,
-      }),
-      35000,
-      "post-login FieldDay navigation"
-    );
-  } catch (error) {
-    page.off("response", onResponse);
-    throw new Error(
-      `Could not reopen FieldDay after login: ${error?.message || error}`
-    );
-  }
-
-  console.log(`[login] Post-login URL: ${page.url()}`);
-  await delay(2500);
-
-  let state;
-  try {
-    state = await withHardTimeout(
-      page.evaluate(() => {
-        const bodyText = document.body?.innerText || "";
-        return {
-          url: location.href,
-          title: document.title,
-          emailPresent: Boolean(
-            document.querySelector('input[type="email"]')
-          ),
-          passwordPresent: Boolean(
-            document.querySelector('input[type="password"]')
-          ),
-          looksLikeFieldDay:
-            bodyText.includes("Daily") &&
-            bodyText.includes("Campaign"),
-          bodyPreview: bodyText.slice(0, 700),
-        };
-      }),
-      7000,
-      "post-login authentication check"
-    );
-  } finally {
-    page.off("response", onResponse);
-  }
-
-  console.log(
-    `[login] Post-login state: emailPresent=${state.emailPresent}, passwordPresent=${state.passwordPresent}, fieldDay=${state.looksLikeFieldDay}, url=${state.url}`
   );
 
-  if (state.emailPresent || state.passwordPresent) {
-    console.error("[login] Login form is still present after workflow + reload.");
-    console.error("[login] Visible page text:", state.bodyPreview);
-    throw new Error(
-      "WorkMyT login workflow returned successfully, but the session is still unauthenticated."
-    );
-  }
-
-  console.log("[login] Login completed and authenticated session confirmed.");
-
+  console.log("[login] Browser login completed.");
 }
 
 function normalizeWhitespace(value) {
@@ -1016,8 +813,6 @@ async function writeOutputToGoogleSheet(output) {
 
 async function waitForManualLogin(page) {
   console.log("[auth] opening WorkMyT");
-  console.log("[auth] checking WorkMyT authentication");
-  console.log("[auth] will log in automatically if needed");
 
   await page.goto(FIELD_DAY_URL, {
     waitUntil: "domcontentloaded",
@@ -1025,113 +820,68 @@ async function waitForManualLogin(page) {
 
   await loginIfNeeded(page);
 
-  console.log("[auth] waiting for FieldDay or assessment button...");
+  console.log("[auth] waiting for WorkMyT UI...");
 
-  try {
-    await page.waitForFunction(
-      () => {
-        const bodyText = document.body?.innerText || "";
+  await delay(3000);
 
-        const alreadyOnFieldDay =
-          bodyText.includes("Daily") &&
-          bodyText.includes("Campaign");
+  const result = await page.evaluate(() => {
+    const text =
+      document.body?.innerText || "";
 
-        const assessmentButton = [
-          ...document.querySelectorAll(
-            "button.bubble-element.materialicons-Materialicon"
-          ),
-        ].find((button) => {
-          const iconText = button.querySelector(
-            ".material-icons-outline"
-          )?.textContent?.trim().toLowerCase();
-
-          return iconText === "assessment";
-        });
-
-        return alreadyOnFieldDay || Boolean(assessmentButton);
-      },
-      {
-        timeout: 30000,
-      }
-    );
-  } catch {
-    const state = await page.evaluate(() => ({
-      url: location.href,
-      title: document.title,
-      bodyText: (document.body?.innerText || "").slice(0, 1500),
-    }));
-
-    console.error("[auth] FieldDay wait timed out.");
-    console.error("[auth] URL:", state.url);
-    console.error("[auth] Title:", state.title);
-    console.error("[auth] Visible text:", state.bodyText);
-
-    throw new Error(
-      "Timed out waiting for FieldDay after login."
-    );
-  }
-
-  const navigationResult = await page.evaluate(async() => {
-    const bodyText = document.body?.innerText || "";
-
-    const alreadyOnFieldDay =
-      bodyText.includes("Daily") &&
-      bodyText.includes("Campaign") &&
-      bodyText.includes("Rep Name");
-
-    if (alreadyOnFieldDay) {
-      return "already-on-fieldday";
+    if (
+      text.includes("Daily") &&
+      text.includes("Campaign")
+    ) {
+      return "already-fieldday";
     }
 
-    const assessmentButton = [
-      ...document.querySelectorAll(
-        "button.bubble-element.materialicons-Materialicon"
-      ),
-    ]
-      .find((button) => {
-        const iconText = button.querySelector(
-          ".material-icons-outline"
-        )?.textContent?.trim().toLowerCase();
+    const buttons = [
+      ...document.querySelectorAll("button"),
+    ];
+
+    const assessmentButton =
+      buttons.find((button) => {
+        const icon =
+          button.querySelector(
+            ".material-icons-outline"
+          );
+
+        const iconText =
+          icon?.textContent
+            ?.trim()
+            .toLowerCase();
 
         return iconText === "assessment";
       });
 
     if (!assessmentButton) {
-      return "assessment-not-found";
+      return "not-found";
     }
-    const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-    await delay(3000)
+    assessmentButton.click();
 
-    assessmentButton.scrollIntoView({
-      behavior: "instant",
-      block: "center",
-    });
-   
-    assessmentButton.dispatchEvent(
-      new MouseEvent("click", {
-        bubbles: true,
-        cancelable: true,
-        view: window,
-      })
-    );
-    return "assessment-clicked";
+    return "clicked";
   });
 
-  if (navigationResult === "assessment-not-found") {
+  console.log(
+    `[auth] navigation result: ${result}`
+  );
+
+  if (result === "not-found") {
     throw new Error(
-      'Could not find the navigation button with icon text "assessment".'
+      "Could not find assessment navigation button."
     );
   }
 
-  if (navigationResult === "assessment-clicked") {
-    console.log("[auth] assessment icon clicked");
-  } else {
-    console.log("[auth] already on FieldDay");
+  if (result === "clicked") {
+    await delay(3000);
   }
 
   await waitForFieldDay(page);
-  console.log("[auth] FieldDay detected; continuing");
+
+  console.log(
+    "[auth] FieldDay detected; continuing"
+  );
 }
 
 // ============================================================
