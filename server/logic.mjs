@@ -30,6 +30,14 @@ function pick(row, aliases) {
 }
 function rowName(row) { return lower(pick(row, ["Rep Name", "repName", "Name"])); }
 function safeDivide(a, b) { return b > 0 ? a / b : null; }
+function normalizeRecordedDate(value) {
+  const text = clean(value);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  const match = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!match) return text;
+  const [, month, day, year] = match;
+  return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+}
 function percent(value) {
   if (value === null || value === undefined || value === "") return "—";
   const n = Number(value);
@@ -53,7 +61,7 @@ function periodDetails(row = {}) {
     return raw !== "" ? percent(raw) : percent(calculated);
   };
   const source = clean(pick(row, ["Data Source", "Source"])) || (Object.keys(row || {}).length ? "WorkMyT" : "No Data");
-  const recordedDate = clean(pick(row, ["Recorded Date", "Date", "Last Worked Date", "Last Worked"]));
+  const recordedDate = normalizeRecordedDate(pick(row, ["Recorded Date", "Date", "Last Worked Date", "Last Worked"]));
   return {
     source,
     recordedDate,
@@ -74,7 +82,8 @@ export function combineAgentsAndGaps(agents, gaps, performance = {}) {
     const name = rowName(gap);
     if (name) gapMap.set(name, gap);
   }
-  const maps = Object.fromEntries(Object.entries(performance).map(([period, rows]) => [period, new Map((rows || []).map((row) => [rowName(row), row]))]));
+  const historyRows = Array.isArray(performance.lastWorkedHistory) ? performance.lastWorkedHistory : [];
+  const maps = Object.fromEntries(Object.entries(performance).filter(([period]) => period !== "lastWorkedHistory").map(([period, rows]) => [period, new Map((rows || []).map((row) => [rowName(row), row]))]));
   return agents.map((agent) => {
     const name = lower(agent.repName);
     return {
@@ -87,6 +96,11 @@ export function combineAgentsAndGaps(agents, gaps, performance = {}) {
         twoWeeksAgo: periodDetails(maps.twoWeeksAgo?.get(name)),
         threeWeeksAgo: periodDetails(maps.threeWeeksAgo?.get(name)),
       },
+      performanceHistory: historyRows
+        .filter((row) => rowName(row) === name)
+        .map((row) => ({ snapshotDate: normalizeRecordedDate(pick(row, ["Snapshot Date"])), ...periodDetails(row) }))
+        .filter((item) => item.recordedDate)
+        .sort((a, b) => String(b.recordedDate).localeCompare(String(a.recordedDate))),
     };
   });
 }

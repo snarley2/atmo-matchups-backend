@@ -2,6 +2,7 @@
 import fs from "fs";
 import path from "path";
 import process from "process";
+import { fileURLToPath } from "url";
 import puppeteer from "puppeteer";
 import dotenv from "dotenv";
 dotenv.config();
@@ -20,6 +21,8 @@ const LOOKBACK_DAYS = Number(
   process.env.PERFORMANCE_LOOKBACK_DAYS || 21
 );
 
+const DATE_ARGUMENT_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
 const OUTPUT_JSON =
   process.env.PERFORMANCE_OUTPUT_JSON ||
   path.join(
@@ -34,6 +37,9 @@ const GOOGLE_SHEET_ID =
 
 const GOOGLE_SHEET_TAB =
   process.env.GOOGLE_SHEET_TAB || "Last Worked";
+
+const LAST_WORKED_HISTORY_TAB =
+  process.env.LAST_WORKED_HISTORY_SHEET_NAME || "Last Worked History";
 
 const GOOGLE_SERVICE_ACCOUNT_FILE =
   process.env.GOOGLE_SERVICE_ACCOUNT_FILE ||
@@ -59,12 +65,46 @@ const CHROME_USER_DATA_DIR =
   process.env.CHROME_USER_DATA_DIR ||
   path.join(process.cwd(), ".chrome-profile");
 
+// Browser provider configuration.
+// - local: launch the installed Chrome browser (keeps the working local flow).
+// - browserless: connect Puppeteer to a managed remote Chrome instance.
+const BROWSER_PROVIDER =
+  (process.env.BROWSER_PROVIDER ||
+    (process.env.BROWSERLESS_TOKEN ? "browserless" : "local"))
+    .trim()
+    .toLowerCase();
+
+const BROWSERLESS_TOKEN =
+  process.env.BROWSERLESS_TOKEN || "";
+
+const BROWSERLESS_ENDPOINT =
+  process.env.BROWSERLESS_ENDPOINT ||
+  "wss://production-sfo.browserless.io";
+
 // ============================================================
 // GENERAL HELPERS
 // ============================================================
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function withHardTimeout(promise, ms, label = "operation") {
+  let timer;
+
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`${label} exceeded ${ms}ms`)),
+          ms
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 function calculateFlowRates(performance) {
@@ -184,45 +224,101 @@ async function loginIfNeeded(page) {
   const emailSelector = 'input[type="email"]';
   const passwordSelector = 'input[type="password"]';
 
-  const loginPageVisible = await page
-    .waitForSelector(emailSelector, {
-      visible: true,
-      timeout: 3000,
-    })
-    .then(() => true)
-    .catch(() => false);
+  await delay(2500);
 
-  if (!loginPageVisible) {
-    console.log("[login] Already logged in.");
+  const loginVisible = await page.evaluate(() => {
+    const emailInput = document.querySelector('input[type="email"]');
+    const passwordInput = document.querySelector('input[type="password"]');
+
+    if (!emailInput || !passwordInput) {
+      return false;
+    }
+
+    return (
+      emailInput.offsetWidth > 0 &&
+      emailInput.offsetHeight > 0 &&
+      passwordInput.offsetWidth > 0 &&
+      passwordInput.offsetHeight > 0
+    );
+  });
+
+  if (!loginVisible) {
+    console.log("[login] Already authenticated.");
     return;
   }
 
-  console.log("[login] Login page detected.");
-
-  await page.click(emailSelector, { clickCount: 3 });
-  await page.type(emailSelector, process.env.WORKMYT_EMAIL, {
-    delay: 30,
-  });
-
-  await page.click(passwordSelector, { clickCount: 3 });
-  await page.type(passwordSelector, process.env.WORKMYT_PASSWORD, {
-    delay: 30,
-  });
   if (!email || !password) {
     throw new Error(
       "WORKMYT_EMAIL or WORKMYT_PASSWORD environment variable is missing."
     );
   }
+
+  console.log("[login] Login page detected.");
+  console.log("[login] Entering credentials...");
+
+  await page.click(emailSelector, {
+    clickCount: 3,
+  });
+
+  await page.type(emailSelector, email, {
+    delay: 50,
+  });
+
+  await page.click(passwordSelector, {
+    clickCount: 3,
+  });
+
+  await page.type(passwordSelector, password, {
+    delay: 50,
+  });
+
+  console.log("[login] Credentials entered.");
+  console.log("[login] Pressing Enter...");
+
+  await page.focus(passwordSelector);
   await page.keyboard.press("Enter");
 
+  console.log("[login] Waiting for normal browser login...");
+
+  await delay(5000);
+
   await page.waitForFunction(
-    () => !document.querySelector('input[type="email"]'),
+    () => {
+      const emailInput =
+        document.querySelector('input[type="email"]');
+
+      const passwordInput =
+        document.querySelector('input[type="password"]');
+
+      const text =
+        document.body?.innerText || "";
+
+      const assessmentFound = [
+        ...document.querySelectorAll("button"),
+      ].some((button) => {
+        const buttonText =
+          button.innerText ||
+          button.textContent ||
+          "";
+
+        return buttonText
+          .toLowerCase()
+          .includes("assessment");
+      });
+
+      return (
+        (!emailInput && !passwordInput) ||
+        assessmentFound ||
+        text.includes("Daily") ||
+        text.includes("Campaign")
+      );
+    },
     {
-      timeout: 30000,
+      timeout: 45000,
     }
   );
 
-  console.log("[login] Login completed.");
+  console.log("[login] Browser login completed.");
 }
 
 function normalizeWhitespace(value) {
@@ -242,6 +338,149 @@ function round(value, places = 2) {
   return Math.round((Number(value) || 0) * factor) / factor;
 }
 
+function parseIsoDate(value, argumentName) {
+  if (!DATE_ARGUMENT_PATTERN.test(String(value || ""))) {
+    throw new Error(`${argumentName} must use YYYY-MM-DD format.`);
+  }
+
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(year, month - 1, day, 12, 0, 0, 0);
+
+  if (
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) {
+    throw new Error(`${argumentName} is not a valid calendar date.`);
+  }
+
+  return date;
+}
+
+function dateDescriptor(date) {
+  return {
+    iso: toLocalIsoDate(date),
+    label: date.toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    }),
+    timestamp: date.getTime(),
+  };
+}
+
+function buildDateRange(fromValue, toValue) {
+  const fromDate = parseIsoDate(fromValue, "--from");
+  const toDate = parseIsoDate(toValue, "--to");
+
+  if (fromDate.getTime() > toDate.getTime()) {
+    throw new Error("--from cannot be later than --to.");
+  }
+
+  const output = [];
+  const cursor = new Date(toDate);
+
+  while (cursor.getTime() >= fromDate.getTime()) {
+    output.push(dateDescriptor(cursor));
+    cursor.setDate(cursor.getDate() - 1);
+  }
+
+  return output;
+}
+
+function readOptionValue(args, index, optionName) {
+  const value = args[index + 1];
+
+  if (!value || value.startsWith("--")) {
+    throw new Error(`${optionName} requires a YYYY-MM-DD value.`);
+  }
+
+  return value;
+}
+
+function parseCommandLine(args = process.argv.slice(2)) {
+  let dateValue = "";
+  let fromValue = "";
+  let toValue = "";
+  let help = false;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index];
+
+    if (argument === "--help" || argument === "-h") {
+      help = true;
+      continue;
+    }
+
+    if (argument === "--date") {
+      dateValue = readOptionValue(args, index, "--date");
+      index += 1;
+      continue;
+    }
+
+    if (argument === "--from") {
+      fromValue = readOptionValue(args, index, "--from");
+      index += 1;
+      continue;
+    }
+
+    if (argument === "--to") {
+      toValue = readOptionValue(args, index, "--to");
+      index += 1;
+      continue;
+    }
+
+    throw new Error(`Unknown command-line option: ${argument}`);
+  }
+
+  if (dateValue && (fromValue || toValue)) {
+    throw new Error("Use either --date or --from/--to, not both.");
+  }
+
+  if (Boolean(fromValue) !== Boolean(toValue)) {
+    throw new Error("A range requires both --from and --to.");
+  }
+
+  if (dateValue) {
+    const date = parseIsoDate(dateValue, "--date");
+    return {
+      help,
+      dates: [dateDescriptor(date)],
+      historyOnly: true,
+      selection: { type: "date", date: dateValue },
+    };
+  }
+
+  if (fromValue && toValue) {
+    return {
+      help,
+      dates: buildDateRange(fromValue, toValue),
+      historyOnly: true,
+      selection: { type: "range", from: fromValue, to: toValue },
+    };
+  }
+
+  return {
+    help,
+    dates: buildLookbackDates(LOOKBACK_DAYS),
+    historyOnly: false,
+    selection: { type: "lookback", days: LOOKBACK_DAYS },
+  };
+}
+
+function printCommandLineHelp() {
+  console.log(`Usage:
+  node last-day-worked.mjs
+  node last-day-worked.mjs --date YYYY-MM-DD
+  node last-day-worked.mjs --from YYYY-MM-DD --to YYYY-MM-DD
+
+With no date options, the normal ${LOOKBACK_DAYS}-day run updates both
+"${GOOGLE_SHEET_TAB}" and "${LAST_WORKED_HISTORY_TAB}".
+
+An explicit date or inclusive range records those days permanently in
+"${LAST_WORKED_HISTORY_TAB}" without replacing the live "${GOOGLE_SHEET_TAB}" tab.`);
+}
+
 function buildLookbackDates(days = 14, endDate = new Date()) {
   const output = [];
 
@@ -250,15 +489,7 @@ function buildLookbackDates(days = 14, endDate = new Date()) {
     date.setHours(12, 0, 0, 0);
     date.setDate(date.getDate() - offset);
 
-    output.push({
-      iso: toLocalIsoDate(date),
-      label: date.toLocaleDateString("en-US", {
-        month: "short",
-        day: "numeric",
-        year: "numeric",
-      }),
-      timestamp: date.getTime(),
-    });
+    output.push(dateDescriptor(date));
   }
 
   return output;
@@ -635,9 +866,180 @@ async function formatGoogleSheet(
   });
 }
 
-async function writeOutputToGoogleSheet(output) {
+function buildHistoryRows(dailyRecords, generatedAt) {
+  const baseHeaders = buildGoogleSheetRows({ reps: [] })[0];
+  const snapshotDate = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date(generatedAt || Date.now()));
+
+  const rows = dailyRecords
+    .filter(isLikelyWorkedDay)
+    .map((record) => {
+      const rates = calculateFlowRates(record);
+      const daysSinceWorked = getDaysSinceDate(record.date);
+
+      return [
+        snapshotDate,
+        generatedAt,
+        record.repName,
+        record.office,
+        record.date,
+        daysSinceWorked,
+        getInactivityFlag(daysSinceWorked),
+        record.workedHours,
+        record.talk,
+        record.stops,
+        record.zips,
+        record.presentations,
+        record.info,
+        record.electricSales,
+        record.gasSales,
+        record.electricPartials,
+        record.gasPartials,
+        rates.talkToStop,
+        rates.stopToZip,
+        rates.zipToPresentation,
+        rates.presentationToInfo,
+        rates.infoToClose,
+      ];
+    });
+
+  return {
+    headers: ["Snapshot Date", ...baseHeaders],
+    rows,
+  };
+}
+
+function normalizeHistoryWorkDate(value) {
+  const text = String(value || "").trim();
+  if (DATE_ARGUMENT_PATTERN.test(text)) return text;
+
+  const match = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!match) return "";
+
+  const [, month, day, year] = match;
+  const iso = `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+
+  try {
+    parseIsoDate(iso, "history date");
+    return iso;
+  } catch {
+    return "";
+  }
+}
+
+function historyRowKey(row, headers) {
+  const repNameIndex = headers.indexOf("Rep Name");
+  const workDateIndex = headers.indexOf("Last Worked Date");
+  const repName = normalizeName(row[repNameIndex]);
+  const workDate = normalizeHistoryWorkDate(row[workDateIndex]);
+
+  return repName && DATE_ARGUMENT_PATTERN.test(workDate)
+    ? `${repName}|${workDate}`
+    : "";
+}
+
+async function upsertDailyRecordsToHistory(sheets, dailyRecords, generatedAt) {
+  const incoming = buildHistoryRows(dailyRecords, generatedAt);
+
+  const spreadsheet = await sheets.spreadsheets.get({
+    spreadsheetId: GOOGLE_SHEET_ID,
+    fields: "sheets.properties",
+  });
+  let historySheet = spreadsheet.data.sheets?.find(
+    (sheet) => sheet.properties?.title === LAST_WORKED_HISTORY_TAB
+  );
+  if (!historySheet) {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: GOOGLE_SHEET_ID,
+      requestBody: {
+        requests: [{ addSheet: { properties: { title: LAST_WORKED_HISTORY_TAB } } }],
+      },
+    });
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: GOOGLE_SHEET_ID,
+      range: `'${LAST_WORKED_HISTORY_TAB}'!A1`,
+      valueInputOption: "RAW",
+      requestBody: { values: [incoming.headers] },
+    });
+  }
+
+  const existingResponse = await sheets.spreadsheets.values.get({
+    spreadsheetId: GOOGLE_SHEET_ID,
+    range: `'${LAST_WORKED_HISTORY_TAB}'!A:AZ`,
+  });
+  const existingValues = existingResponse.data.values || [];
+  const existingHeaders = existingValues[0] || [];
+
+  if (
+    existingHeaders.length &&
+    JSON.stringify(existingHeaders) !== JSON.stringify(incoming.headers)
+  ) {
+    throw new Error(
+      `History tab headers do not match the expected schema. ` +
+      `Expected: ${incoming.headers.join(", ")}`
+    );
+  }
+
+  const byRepAndDate = new Map();
+  const preservedRows = [];
+  const workDateIndex = incoming.headers.indexOf("Last Worked Date");
+
+  for (const row of existingValues.slice(1)) {
+    const key = historyRowKey(row, incoming.headers);
+    if (!key) {
+      if (row.some((value) => String(value || "").trim())) preservedRows.push(row);
+      continue;
+    }
+
+    const normalizedRow = [...row];
+    normalizedRow[workDateIndex] = normalizeHistoryWorkDate(row[workDateIndex]);
+    byRepAndDate.set(key, normalizedRow);
+  }
+
+  for (const row of incoming.rows) {
+    const key = historyRowKey(row, incoming.headers);
+    if (key) byRepAndDate.set(key, row);
+  }
+
+  const dateIndex = workDateIndex;
+  const repIndex = incoming.headers.indexOf("Rep Name");
+  const mergedRows = [...byRepAndDate.values()].sort((left, right) =>
+    String(right[dateIndex] || "").localeCompare(String(left[dateIndex] || "")) ||
+    String(left[repIndex] || "").localeCompare(String(right[repIndex] || ""))
+  );
+
+  await sheets.spreadsheets.values.clear({
+    spreadsheetId: GOOGLE_SHEET_ID,
+    range: `'${LAST_WORKED_HISTORY_TAB}'!A:AZ`,
+  });
+
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: GOOGLE_SHEET_ID,
+    range: `'${LAST_WORKED_HISTORY_TAB}'!A1`,
+    valueInputOption: "RAW",
+    requestBody: { values: [incoming.headers, ...mergedRows, ...preservedRows] },
+  });
+
+  console.log(
+    `[history] saved ${incoming.rows.length} worked-day rows; ` +
+    `${mergedRows.length} unique rep/date records are now stored permanently`
+  );
+}
+
+async function writeOutputToGoogleSheet(output, dailyRecords, { historyOnly = false } = {}) {
   const sheets =
     await getGoogleSheetsClient();
+
+  await upsertDailyRecordsToHistory(sheets, dailyRecords, output.generatedAt);
+
+  if (historyOnly) {
+    console.log('[sheet] Historical run complete; live "Last Worked" tab was not replaced.');
+    return;
+  }
 
   const values =
     buildGoogleSheetRows(output);
@@ -673,8 +1075,6 @@ async function writeOutputToGoogleSheet(output) {
 
 async function waitForManualLogin(page) {
   console.log("[auth] opening WorkMyT");
-  console.log("[auth] log in manually in the Chrome window");
-  console.log("[auth] the script will click the assessment icon after login");
 
   await page.goto(FIELD_DAY_URL, {
     waitUntil: "domcontentloaded",
@@ -682,96 +1082,68 @@ async function waitForManualLogin(page) {
 
   await loginIfNeeded(page);
 
-  await page.waitForFunction(
-    () => {
-      const bodyText = document.body?.innerText || "";
+  console.log("[auth] waiting for WorkMyT UI...");
 
-      const alreadyOnFieldDay =
-        bodyText.includes("Daily") &&
-        bodyText.includes("Campaign") &&
-        bodyText.includes("Rep Name");
+  await delay(3000);
 
-      const assessmentButton = [
-        ...document.querySelectorAll(
-          "button.bubble-element.materialicons-Materialicon"
-        ),
-      ]
-        .find((button) => {
-          const iconText = button.querySelector(
-            "text.material-icons-outline"
-          )?.textContent?.trim().toLowerCase();
+  const result = await page.evaluate(() => {
+    const text =
+      document.body?.innerText || "";
 
-          return iconText === "assessment";
-        });
-
-      return alreadyOnFieldDay || Boolean(assessmentButton);
-    },
-    {
-      timeout: 0,
-    }
-  );
-
-  const navigationResult = await page.evaluate(async() => {
-    const bodyText = document.body?.innerText || "";
-
-    const alreadyOnFieldDay =
-      bodyText.includes("Daily") &&
-      bodyText.includes("Campaign") &&
-      bodyText.includes("Rep Name");
-
-    if (alreadyOnFieldDay) {
-      return "already-on-fieldday";
+    if (
+      text.includes("Daily") &&
+      text.includes("Campaign")
+    ) {
+      return "already-fieldday";
     }
 
-    const assessmentButton = [
-      ...document.querySelectorAll(
-        "button.bubble-element.materialicons-Materialicon"
-      ),
-    ]
-      .find((button) => {
-        const iconText = button.querySelector(
-          "text.material-icons-outline"
-        )?.textContent?.trim().toLowerCase();
+    const buttons = [
+      ...document.querySelectorAll("button"),
+    ];
+
+    const assessmentButton =
+      buttons.find((button) => {
+        const icon =
+          button.querySelector(
+            ".material-icons-outline"
+          );
+
+        const iconText =
+          icon?.textContent
+            ?.trim()
+            .toLowerCase();
 
         return iconText === "assessment";
       });
 
     if (!assessmentButton) {
-      return "assessment-not-found";
+      return "not-found";
     }
-    const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-    await delay(3000)
+    assessmentButton.click();
 
-    assessmentButton.scrollIntoView({
-      behavior: "instant",
-      block: "center",
-    });
-   
-    assessmentButton.dispatchEvent(
-      new MouseEvent("click", {
-        bubbles: true,
-        cancelable: true,
-        view: window,
-      })
-    );
-    return "assessment-clicked";
+    return "clicked";
   });
 
-  if (navigationResult === "assessment-not-found") {
+  console.log(
+    `[auth] navigation result: ${result}`
+  );
+
+  if (result === "not-found") {
     throw new Error(
-      'Could not find the navigation button with icon text "assessment".'
+      "Could not find assessment navigation button."
     );
   }
 
-  if (navigationResult === "assessment-clicked") {
-    console.log("[auth] assessment icon clicked");
-  } else {
-    console.log("[auth] already on FieldDay");
+  if (result === "clicked") {
+    await delay(3000);
   }
 
   await waitForFieldDay(page);
-  console.log("[auth] FieldDay detected; continuing");
+
+  console.log(
+    "[auth] FieldDay detected; continuing"
+  );
 }
 
 // ============================================================
@@ -1239,26 +1611,70 @@ function calculateRates(totals) {
 // ============================================================
 
 async function run() {
+  const commandLine = parseCommandLine();
+
+  if (commandLine.help) {
+    printCommandLineHelp();
+    return;
+  }
+
   fs.mkdirSync(path.dirname(OUTPUT_JSON), {
     recursive: true,
   });
 
-  const browser = await puppeteer.launch({
-    headless: false,
-    executablePath: CHROME_PATH,
-    userDataDir: CHROME_USER_DATA_DIR,
-    defaultViewport: null,
-    args: [
-      "--start-maximized",
-      "--disable-notifications",
-    ],
-  });
+  let browser;
+
+  if (BROWSER_PROVIDER === "browserless") {
+    if (!BROWSERLESS_TOKEN) {
+      throw new Error(
+        "BROWSER_PROVIDER is browserless but BROWSERLESS_TOKEN is missing."
+      );
+    }
+
+    const separator =
+      BROWSERLESS_ENDPOINT.includes("?") ? "&" : "?";
+
+    const browserWSEndpoint =
+      `${BROWSERLESS_ENDPOINT}${separator}token=${encodeURIComponent(
+        BROWSERLESS_TOKEN
+      )}`;
+
+    console.log(
+      `[chrome] connecting to Browserless (${BROWSERLESS_ENDPOINT})`
+    );
+
+    browser = await puppeteer.connect({
+      browserWSEndpoint,
+      defaultViewport: null,
+    });
+
+    console.log("[chrome] Browserless connected");
+  } else {
+    console.log("[chrome] launching local Chrome");
+
+    browser = await puppeteer.launch({
+      headless: false,
+      executablePath: CHROME_PATH,
+      userDataDir: CHROME_USER_DATA_DIR,
+      defaultViewport: null,
+      args: [
+        "--start-maximized",
+        "--disable-notifications",
+      ],
+    });
+  }
 
   let cleaned = false;
 
   const safeCleanup = async () => {
     if (cleaned) return;
     cleaned = true;
+
+    if (BROWSER_PROVIDER === "browserless") {
+      await browser.disconnect();
+      return;
+    }
+
     await browser.close().catch(() => {});
   };
 
@@ -1299,7 +1715,7 @@ async function run() {
     await selectDailyView(page);
     await selectCampaign(page, CAMPAIGN_NAME);
 
-    const dates = buildLookbackDates(LOOKBACK_DAYS);
+    const dates = commandLine.dates;
     const dailyRecords = [];
     const skippedDates = [];
     const failedDates = [];
@@ -1384,7 +1800,7 @@ async function run() {
         url: FIELD_DAY_URL,
         campaign: CAMPAIGN_NAME,
         mode: "Daily",
-        lookbackDays: LOOKBACK_DAYS,
+        selection: commandLine.selection,
       },
       summary: {
         calendarDatesRequested: dates.length,
@@ -1401,7 +1817,9 @@ async function run() {
       reps,
     };
 
-    await writeOutputToGoogleSheet(output);
+    await writeOutputToGoogleSheet(output, dailyRecords, {
+      historyOnly: commandLine.historyOnly,
+    });
 
     console.log("\n[done]");
     console.log(
@@ -1416,7 +1834,22 @@ async function run() {
   }
 }
 
-run().catch((error) => {
-  console.error("[fatal]", error);
-  process.exit(1);
-});
+const wasRunDirectly =
+  process.argv[1] &&
+  path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
+
+if (wasRunDirectly) {
+  run().catch((error) => {
+    console.error("[fatal]", error);
+    process.exit(1);
+  });
+}
+
+export {
+  buildDateRange,
+  buildHistoryRows,
+  historyRowKey,
+  normalizeHistoryWorkDate,
+  parseCommandLine,
+  parseIsoDate,
+};

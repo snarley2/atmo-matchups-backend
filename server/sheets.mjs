@@ -9,6 +9,7 @@ const gapsTab = process.env.TEAM_GAPS_SHEET_NAME || "Team/Rep Gaps";
 const matchupsTab = process.env.MATCHUPS_SHEET_NAME || "Daily Matchups";
 const matchupDraftTab = process.env.MATCHUP_DRAFT_SHEET_NAME || "Matchup Draft";
 const lastWorkedTab = process.env.GOOGLE_SHEET_TAB || "Last Worked";
+const lastWorkedHistoryTab = process.env.LAST_WORKED_HISTORY_SHEET_NAME || "Last Worked History";
 const currentWeekTab = process.env.CURRENT_WEEK_SHEET_TAB || "Current Week Avg";
 const lastWeekTab = process.env.LAST_WEEK_SHEET_TAB || "Last Week Avg";
 const twoWeeksAgoTab = process.env.TWO_WEEKS_AGO_SHEET_TAB || "2 Weeks Ago Avg";
@@ -485,8 +486,9 @@ function mergeLastWorkedWorkMyTFirst(workRows = [], manualRows = []) {
 }
 
 export async function getPerformanceTabs() {
-  const [lastWorked, currentWeek, lastWeek, twoWeeksAgo, threeWeeksAgo, manual] = await Promise.all([
+  const [lastWorked, lastWorkedHistory, currentWeek, lastWeek, twoWeeksAgo, threeWeeksAgo, manual] = await Promise.all([
     readTab(lastWorkedTab),
+    readTab(lastWorkedHistoryTab),
     readTab(currentWeekTab),
     readTab(lastWeekTab),
     readTab(twoWeeksAgoTab),
@@ -495,6 +497,7 @@ export async function getPerformanceTabs() {
   ]);
   const work = {
     lastWorked: rowsToObjects(lastWorked),
+    lastWorkedHistory: rowsToObjects(lastWorkedHistory),
     currentWeek: rowsToObjects(currentWeek),
     lastWeek: rowsToObjects(lastWeek),
     twoWeeksAgo: rowsToObjects(twoWeeksAgo),
@@ -518,6 +521,7 @@ export async function getPerformanceTabs() {
 
   return {
     lastWorked: mergeLastWorkedWorkMyTFirst(work.lastWorked, manualLast),
+    lastWorkedHistory: work.lastWorkedHistory,
     currentWeek: mergeWorkMyTFirst(work.currentWeek, manualCurrent),
     lastWeek: mergeWorkMyTFirst(work.lastWeek, manualPrevious),
     // Historical weekly tabs are WorkMyT snapshots. They are used by
