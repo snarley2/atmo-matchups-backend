@@ -5,7 +5,7 @@ import { Server as SocketIOServer } from "socket.io";
 import cors from "cors";
 import crypto from "node:crypto";
 import cron from "node-cron";
-import { getAgents, replaceAgents, getGaps, getPerformanceTabs, saveMatchups, getDraftMatchups, saveDraftMatchups, getFinalMatchups, getFieldNotes, addFieldNote, getManualNumbers, upsertManualNumbers, getSuggestions, addSuggestion } from "./sheets.mjs";
+import { getAgents, replaceAgents, getGaps, getPerformanceTabs, saveMatchups, getDraftMatchups, saveDraftMatchups, getFinalMatchups, getFieldNotes, addFieldNote, getManualNumbers, upsertManualNumbers, getSuggestions, addSuggestion, getNumbersTracking } from "./sheets.mjs";
 import { combineAgentsAndGaps, generateGroups } from "./logic.mjs";
 import { runDailyAutomation, isDailyAutomationRunning } from "../run.mjs";
 
@@ -427,6 +427,14 @@ app.post("/api/suggestions", async (req, res, next) => {
     });
     io.emit("suggestions:new", saved);
     res.status(201).json(saved);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/numbers-tracking", requireAdmin, async (_req, res, next) => {
+  try {
+    res.json(await getNumbersTracking());
   } catch (error) {
     next(error);
   }

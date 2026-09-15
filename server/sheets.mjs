@@ -531,3 +531,198 @@ export async function getPerformanceTabs() {
     threeWeeksAgo: work.threeWeeksAgo,
   };
 }
+
+function rowCountsForTracking(row = {}) {
+  const normalizedHeaders = new Map(
+    Object.keys(row).map((key) => [
+      String(key).toLowerCase().replace(/[^a-z0-9]/g, ""),
+      key,
+    ]),
+  );
+  const value = (aliases) => {
+    for (const alias of aliases) {
+      const key = normalizedHeaders.get(
+        String(alias).toLowerCase().replace(/[^a-z0-9]/g, ""),
+      );
+      if (key !== undefined) return cleanNumber(row[key]);
+    }
+    return 0;
+  };
+
+  return {
+    talks: value(["Talk", "Talks"]),
+    stops: value(["Stop", "Stops"]),
+    zips: value(["Zip", "Zips"]),
+    presentations: value(["Presentation", "Presentations", "Pres"]),
+    info: value(["Info"]),
+    electric: value(["Electric Sales", "Electric Sale"]),
+    electricPartial: value(["Electric Partials", "Electric Partial Sales"]),
+    gas: value(["Gas Sales", "Gas Sale"]),
+  };
+}
+
+function normalizeTrackingDate(value) {
+  const text = String(value || "").trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+
+  const match = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!match) return "";
+
+  const [, month, day, year] = match;
+  return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+}
+
+function trackingRecordedDate(row = {}) {
+  return normalizeTrackingDate(
+    row["Recorded Date"] ||
+      row["Last Worked Date"] ||
+      row["Last Worked"] ||
+      row.Date ||
+      row.date,
+  );
+}
+
+function normalizedTrackingName(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+function trackingRepName(row = {}) {
+  return String(row["Rep Name"] || row.repName || row.Name || "").trim();
+}
+
+function daysBetweenYmd(from, to) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from || "") || !/^\d{4}-\d{2}-\d{2}$/.test(to || "")) {
+    return null;
+  }
+  return Math.max(0, Math.round((ymdDate(to) - ymdDate(from)) / 86400000));
+}
+
+function averageCountRows(rows = []) {
+  const fields = [
+    "talks",
+    "stops",
+    "zips",
+    "presentations",
+    "info",
+    "electric",
+    "electricPartial",
+    "gas",
+  ];
+  const result = Object.fromEntries(fields.map((field) => [field, 0]));
+
+  if (!rows.length) return result;
+
+  for (const row of rows) {
+    for (const field of fields) result[field] += Number(row.counts?.[field] || 0);
+  }
+
+  for (const field of fields) {
+    result[field] = Math.round((result[field] / rows.length) * 10) / 10;
+  }
+
+  return result;
+}
+
+export function buildNumbersTracking(agents, currentRows, historyRows, manualEntries, today = easternYmd()) {
+  const byRepDate = new Map();
+
+  for (const row of [...historyRows, ...currentRows]) {
+    const repName = trackingRepName(row);
+    const normalizedName = normalizedTrackingName(repName);
+    const date = trackingRecordedDate(row);
+
+    if (!normalizedName || !date || !rowActivity(row)) continue;
+
+    byRepDate.set(`${normalizedName}|${date}`, {
+      repName,
+      date,
+      counts: rowCountsForTracking(row),
+      source: "WorkMyT",
+    });
+  }
+
+  // Manual data only fills a rep/date where WorkMyT has no recorded activity.
+  for (const entry of manualEntries) {
+    const normalizedName = normalizedTrackingName(entry.repName);
+    const date = normalizeTrackingDate(entry.date);
+    if (!normalizedName || !date) continue;
+
+    const key = `${normalizedName}|${date}`;
+    if (byRepDate.has(key)) continue;
+
+    byRepDate.set(key, {
+      repName: entry.repName,
+      date,
+      counts: {
+        talks: entry.talks,
+        stops: entry.stops,
+        zips: entry.zips,
+        presentations: entry.presentations,
+        info: entry.info,
+        electric: entry.electric,
+        electricPartial: entry.electricPartial,
+        gas: entry.gas,
+      },
+      source: "Manual",
+    });
+  }
+
+  const currentStart = saturdayWeekStart(today);
+  const currentEnd = addDaysYmd(currentStart, 6);
+  const records = [...byRepDate.values()];
+
+  const reps = agents.map((agent) => {
+    const agentName = normalizedTrackingName(agent.repName);
+    const ownRecords = records
+      .filter((record) => normalizedTrackingName(record.repName) === agentName)
+      .sort((left, right) => right.date.localeCompare(left.date));
+    const latest = ownRecords[0] || null;
+    const weekRecords = ownRecords.filter(
+      (record) => record.date >= currentStart && record.date <= currentEnd,
+    );
+    const daysAgo = latest ? daysBetweenYmd(latest.date, today) : null;
+    const status = daysAgo === null ? "black" : daysAgo <= 2 ? "green" : daysAgo <= 5 ? "yellow" : "black";
+
+    return {
+      repKey: agent.repKey,
+      repName: agent.repName,
+      team: agent.team || "Unassigned",
+      teamLead: agent.teamLead || "",
+      repType: agent.repType || "",
+      attendance: agent.attendance || "in",
+      lastRecordedDate: latest?.date || "",
+      daysAgo,
+      status,
+      latestCounts: latest?.counts || averageCountRows([]),
+      latestSource: latest?.source || "",
+      weekRecordedDays: weekRecords.length,
+      weekAverage: averageCountRows(weekRecords),
+    };
+  });
+
+  return {
+    generatedAt: new Date().toISOString(),
+    weekStart: currentStart,
+    weekEnd: currentEnd,
+    reps,
+  };
+}
+
+export async function getNumbersTracking() {
+  const [agents, current, history, manual] = await Promise.all([
+    getAgents(),
+    readTab(lastWorkedTab),
+    readTab(lastWorkedHistoryTab),
+    getManualNumbers(),
+  ]);
+
+  return buildNumbersTracking(
+    agents,
+    rowsToObjects(current),
+    rowsToObjects(history),
+    manual,
+  );
+}
