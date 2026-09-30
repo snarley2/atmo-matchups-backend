@@ -64,6 +64,7 @@ function parseAiLog(rows, fileName) {
   const header = rows[headerIndex].map((value) => String(value || "").trim());
   const detail = rows[headerIndex + 1] || [];
   const currentIndex = header.findIndex((value) => value.toLowerCase() === "tw elec");
+  const gasIndex = header.findIndex((value) => value.toLowerCase() === "tw gas");
   const lastIndex = header.findIndex((value) => value.toLowerCase() === "lw elec");
   const twoIndex = header.findIndex((value) => value.toLowerCase() === "lw2 elec");
   const partialIndexes = detail.map((value, index) => String(value || "").trim().toLowerCase() === "p" && index < currentIndex ? index : -1).filter((index) => index >= 0);
@@ -72,10 +73,12 @@ function parseAiLog(rows, fileName) {
     const keys = nameKeys(repName);
     if (!keys.length) return [];
     const partials = partialIndexes.reduce((sum, index) => sum + number(row[index]), 0);
-    const current = currentIndex >= 0 ? number(row[currentIndex]) + partials * 0.5 : null;
+    const electric = currentIndex >= 0 ? number(row[currentIndex]) : 0;
+    const gas = gasIndex >= 0 ? number(row[gasIndex]) : 0;
+    const production = (electric + partials) * 40 + gas * 18;
     const lastWeek = lastIndex >= 0 && String(row[lastIndex] || "").trim() !== "" ? number(row[lastIndex]) : null;
     const twoWeeksAgo = twoIndex >= 0 && String(row[twoIndex] || "").trim() !== "" ? number(row[twoIndex]) : null;
-    return [{ repName: repName.replace(/[↓↑]/g, "").trim(), keys, aliases: nameAliases(repName), current, lastWeek, twoWeeksAgo, overall: current, partials, sourceFile: fileName }];
+    return [{ repName: repName.replace(/[↓↑]/g, "").trim(), keys, aliases: nameAliases(repName), current: production, electric, gas, production, lastWeek, twoWeeksAgo, overall: production, partials, sourceFile: fileName }];
   });
 }
 
@@ -86,6 +89,8 @@ function parseStandardLog(rows, fileName) {
   const electricIndexes = header.map((value, index) => /^electric$/i.test(value) ? index : -1).filter((index) => index >= 0);
   const partialIndexes = header.map((value, index) => /^partials?$/i.test(value) ? index : -1).filter((index) => index >= 0);
   const totalElectricIndex = electricIndexes.at(-1);
+  const gasIndexes = header.map((value, index) => /^gas$/i.test(value) ? index : -1).filter((index) => index >= 0);
+  const totalGasIndex = gasIndexes.at(-1);
   const prevIndex = header.findIndex((value) => /^prev\.?\s*week/i.test(value));
   const twoIndex = header.findIndex((value) => /^2\s*wk/i.test(value));
   return rows.slice(headerIndex + 1).flatMap((row) => {
@@ -93,10 +98,12 @@ function parseStandardLog(rows, fileName) {
     const keys = nameKeys(repName);
     if (!keys.length) return [];
     const partials = partialIndexes.filter((index) => index < totalElectricIndex).reduce((sum, index) => sum + number(row[index]), 0);
-    const current = Number.isInteger(totalElectricIndex) ? number(row[totalElectricIndex]) + partials * 0.5 : null;
+    const electric = Number.isInteger(totalElectricIndex) ? number(row[totalElectricIndex]) : 0;
+    const gas = Number.isInteger(totalGasIndex) ? number(row[totalGasIndex]) : 0;
+    const production = (electric + partials) * 40 + gas * 18;
     const lastWeek = prevIndex >= 0 ? weeklyElectric(row[prevIndex]) : null;
     const twoWeeksAgo = twoIndex >= 0 ? weeklyElectric(row[twoIndex]) : null;
-    return [{ repName, keys, aliases: nameAliases(repName), current, lastWeek, twoWeeksAgo, overall: current, partials, sourceFile: fileName }];
+    return [{ repName, keys, aliases: nameAliases(repName), current: production, electric, gas, production, lastWeek, twoWeeksAgo, overall: production, partials, sourceFile: fileName }];
   });
 }
 
@@ -130,11 +137,14 @@ export function attachProductionLogs(agents = []) {
     const record = nameKeys(agent.repName).map((key) => byName.get(key)).find(Boolean) || nameAliases(agent.repName).map((key) => uniqueAliases.get(key)).find(Boolean);
     return { ...agent, productionLog: record ? {
       current: record.current,
+      electric: record.electric,
+      gas: record.gas,
+      production: record.production,
       lastWeek: record.lastWeek,
       twoWeeksAgo: record.twoWeeksAgo,
       overall: record.overall,
       partials: record.partials,
       sourceFile: record.sourceFile,
-    } : { current: 0, lastWeek: null, twoWeeksAgo: null, overall: 0, partials: 0, sourceFile: "" } };
+    } : { current: 0, electric: 0, gas: 0, production: 0, lastWeek: null, twoWeeksAgo: null, overall: 0, partials: 0, sourceFile: "" } };
   });
 }

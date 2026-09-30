@@ -9,6 +9,7 @@ const gapsTab = process.env.TEAM_GAPS_SHEET_NAME || "Team/Rep Gaps";
 const matchupsTab = process.env.MATCHUPS_SHEET_NAME || "Daily Matchups";
 const matchupDraftTab = process.env.MATCHUP_DRAFT_SHEET_NAME || "Matchup Draft";
 const storeMatchupsTab = process.env.STORE_MATCHUPS_SHEET_NAME || "Store Matchups";
+const workMatchupsTab = process.env.WORK_MATCHUPS_SHEET_NAME || "Work Matchups";
 const lastWorkedTab = process.env.GOOGLE_SHEET_TAB || "Last Worked";
 const lastWorkedHistoryTab = process.env.LAST_WORKED_HISTORY_SHEET_NAME || "Last Worked History";
 const currentWeekTab = process.env.CURRENT_WEEK_SHEET_TAB || "Current Week Avg";
@@ -334,6 +335,52 @@ export async function saveStoreMatchups({ date, groups }) {
 export async function getStoreMatchups() {
   const tab = await readTab(storeMatchupsTab);
   return rowsToStoreMatchups(tab);
+}
+
+const WORK_MATCHUP_HEADERS = [
+  "Date", "Priority", "Group ID", "Group Name", "Store ID", "Store Name",
+  "Group Production", "Rep Key", "Rep Name", "Role", "Team", "Team Lead",
+  "Rep Production", "Updated At",
+];
+
+function workMatchupRows({ date, groups, updatedAt = new Date().toISOString() }) {
+  return (groups || []).flatMap((group, index) => {
+    const members = Array.isArray(group.members) ? group.members : [];
+    const base = [date || "", Number(group.priority) || index + 1, group.id || `work-${index + 1}`, group.name || `Work Team ${index + 1}`, group.storeId || "", group.storeName || "", Number(group.production) || 0];
+    if (!members.length) return [[...base, "", "", "", "", "", 0, updatedAt]];
+    return members.map((member) => [...base, member.repKey || "", member.repName || "", member.repType || "", member.team || "", member.teamLead || member.trainer || "", Number(member.production) || 0, updatedAt]);
+  });
+}
+
+function rowsToWorkMatchups(tab = {}) {
+  const groups = [], byId = new Map();
+  let date = "", updatedAt = "";
+  for (const row of tab.rows || []) {
+    date ||= String(row[0] || "");
+    updatedAt = String(row[13] || updatedAt || "");
+    const id = String(row[2] || `work-${groups.length + 1}`);
+    let group = byId.get(id);
+    if (!group) {
+      group = { id, priority: Number(row[1]) || groups.length + 1, name: String(row[3] || `Work Team ${groups.length + 1}`), storeId: String(row[4] || ""), storeName: String(row[5] || ""), production: Number(row[6]) || 0, members: [] };
+      byId.set(id, group); groups.push(group);
+    }
+    if (row[7] || row[8]) group.members.push({ repKey: String(row[7] || ""), repName: String(row[8] || ""), repType: String(row[9] || ""), team: String(row[10] || ""), teamLead: String(row[11] || ""), trainer: String(row[11] || ""), production: Number(row[12]) || 0 });
+  }
+  return { date, groups: groups.sort((a, b) => a.priority - b.priority), updatedAt };
+}
+
+export async function saveWorkMatchups({ date, groups }) {
+  const client = await sheetsClient();
+  await ensureTab(client, workMatchupsTab, WORK_MATCHUP_HEADERS);
+  const updatedAt = new Date().toISOString();
+  await clearEntireTab(client, workMatchupsTab);
+  await client.spreadsheets.values.update({ spreadsheetId, range: `'${workMatchupsTab}'!A1`, valueInputOption: "RAW", requestBody: { values: [WORK_MATCHUP_HEADERS, ...workMatchupRows({ date, groups, updatedAt })] } });
+  return { date, groups, updatedAt };
+}
+
+export async function getWorkMatchups() {
+  const tab = await readTab(workMatchupsTab);
+  return rowsToWorkMatchups(tab);
 }
 
 

@@ -5,8 +5,8 @@ import { Server as SocketIOServer } from "socket.io";
 import cors from "cors";
 import crypto from "node:crypto";
 import cron from "node-cron";
-import { getAgents, replaceAgents, getGaps, getPerformanceTabs, saveMatchups, getDraftMatchups, saveDraftMatchups, getFinalMatchups, saveStoreMatchups, getStoreMatchups, getFieldNotes, addFieldNote, getManualNumbers, upsertManualNumbers, getSuggestions, addSuggestion, getNumbersTracking } from "./sheets.mjs";
-import { combineAgentsAndGaps, generateGroups, generateStoreGroups, STORE_CATALOG } from "./logic.mjs";
+import { getAgents, replaceAgents, getGaps, getPerformanceTabs, saveMatchups, getDraftMatchups, saveDraftMatchups, getFinalMatchups, saveStoreMatchups, getStoreMatchups, saveWorkMatchups, getWorkMatchups, getFieldNotes, addFieldNote, getManualNumbers, upsertManualNumbers, getSuggestions, addSuggestion, getNumbersTracking } from "./sheets.mjs";
+import { combineAgentsAndGaps, generateGroups, generateStoreGroups, generateWorkGroups, STORE_CATALOG } from "./logic.mjs";
 import { attachProductionLogs } from "./production-csv.mjs";
 import { runDailyAutomation, isDailyAutomationRunning } from "../run.mjs";
 
@@ -162,6 +162,17 @@ io.on("connection", (socket) => {
     });
   });
 
+  socket.on("work:state", (payload = {}) => {
+    if (!socket.data.admin) return;
+    const groups = Array.isArray(payload.groups) ? payload.groups : [];
+    socket.broadcast.emit("work:state", {
+      groups,
+      actor: sanitizeLiveName(payload.actor || socket.data.actor),
+      action: String(payload.action || "updated the work matchup board").slice(0, 180),
+      at: payload.at || new Date().toISOString(),
+    });
+  });
+
   for (const eventName of ["store-drag:start", "store-drag:move", "store-drag:end"]) {
     socket.on(eventName, (payload = {}) => {
       if (!socket.data.admin) return;
@@ -172,6 +183,15 @@ io.on("connection", (socket) => {
         at: new Date().toISOString(),
       };
       if (eventName === "store-drag:move") socket.broadcast.volatile.emit(eventName, message);
+      else socket.broadcast.emit(eventName, message);
+    });
+  }
+
+  for (const eventName of ["work-drag:start", "work-drag:move", "work-drag:end"]) {
+    socket.on(eventName, (payload = {}) => {
+      if (!socket.data.admin) return;
+      const message = { ...payload, socketId: socket.id, actor: sanitizeLiveName(payload.actor || socket.data.actor), at: new Date().toISOString() };
+      if (eventName === "work-drag:move") socket.broadcast.volatile.emit(eventName, message);
       else socket.broadcast.emit(eventName, message);
     });
   }
@@ -204,6 +224,7 @@ io.on("connection", (socket) => {
   socket.on("disconnect", () => {
     socket.broadcast.emit("drag:end", { socketId: socket.id });
     socket.broadcast.emit("store-drag:end", { socketId: socket.id });
+    socket.broadcast.emit("work-drag:end", { socketId: socket.id });
     console.log(`[live] disconnected ${socket.id} (${socket.data.actor})`);
   });
 });
@@ -418,6 +439,28 @@ app.post("/api/store-matchups/generate", requireAdmin, async (_req, res, next) =
     const [agents, gaps, performance] = await Promise.all([getAgents(), getGaps(), getPerformanceTabs()]);
     const combined = combineAgentsAndGaps(attachProductionLogs(agents), gaps, performance);
     res.json({ groups: generateStoreGroups(combined) });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/work-matchups/generate", requireAdmin, async (_req, res, next) => {
+  try {
+    const [agents, gaps, performance] = await Promise.all([getAgents(), getGaps(), getPerformanceTabs()]);
+    const combined = combineAgentsAndGaps(attachProductionLogs(agents), gaps, performance);
+    res.json({ groups: generateWorkGroups(combined) });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/work-matchups", async (_req, res, next) => {
+  try { res.json(await getWorkMatchups()); } catch (error) { next(error); }
+});
+
+app.post("/api/work-matchups", requireAdmin, async (req, res, next) => {
+  try {
+    const date = String(req.body.date || easternDateParts().date);
+    const groups = Array.isArray(req.body.groups) ? req.body.groups : [];
+    const saved = await saveWorkMatchups({ date, groups });
+    io.emit("work:state", { groups, actor: sanitizeLiveName(req.body.actor || req.admin?.repName || "Server"), action: String(req.body.action || "saved the work matchup board").slice(0, 180), at: new Date().toISOString() });
+    res.json(saved);
   } catch (error) { next(error); }
 });
 

@@ -482,8 +482,20 @@ export function generateGroups(agents, options = {}) {
 }
 
 export function overallProduction(agent) {
-  const currentTsvProduction = Number(agent?.productionLog?.current);
+  const currentTsvProduction = Number(agent?.productionLog?.production);
   return Number.isFinite(currentTsvProduction) ? Math.round(currentTsvProduction * 10) / 10 : 0;
+}
+
+export function generateWorkGroups(agents = []) {
+  return generateStoreGroups(agents).map((group, index) => ({
+    id: crypto.randomUUID(),
+    name: `Work Team ${index + 1}`,
+    priority: index + 1,
+    storeId: "",
+    storeName: "",
+    production: group.production,
+    members: group.members,
+  }));
 }
 
 function trainerNameFor(agent, trainerNames) {
