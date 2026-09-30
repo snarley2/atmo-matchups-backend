@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "start": "node server/index.mjs",
     "server": "node server/index.mjs",
     "dev:server": "node --watch server/index.mjs",
     "run": "node run.mjs",

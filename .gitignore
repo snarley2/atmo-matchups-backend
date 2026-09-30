@@ -1,6 +1,6 @@
 # Dependencies
 node_modules/
-.cromhe-profile/
+.chrome-profile/
 # Environment variables
 .env
 .env.*
