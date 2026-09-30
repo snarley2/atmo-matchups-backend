@@ -429,3 +429,125 @@ export function generateGroups(agents, options = {}) {
     : buildGapGroups(reps, traineeMaxSize);
   return assignLeaders(groups, agents, trainersOnly);
 }
+
+const STORE_PRODUCTION_PERIODS = ["currentWeek", "lastWeek", "twoWeeksAgo", "threeWeeksAgo"];
+
+function periodProduction(agent, period) {
+  const counts = agent.performance?.[period]?.counts || {};
+  const electric = Number(counts.electric) || 0;
+  const partial = Number(counts.electricPartial) || 0;
+  const close = Number(counts.close) || 0;
+  if (electric > 0 || partial > 0) return electric + partial * 0.5;
+  return close;
+}
+
+export function overallProduction(agent) {
+  const weekly = STORE_PRODUCTION_PERIODS
+    .map((period) => periodProduction(agent, period))
+    .filter((value) => value > 0);
+  if (!weekly.length) return 0;
+  return Math.round((weekly.reduce((sum, value) => sum + value, 0) / weekly.length) * 10) / 10;
+}
+
+function trainerNameFor(agent, trainerNames) {
+  const explicit = clean(agent.trainer);
+  if (explicit && trainerNames.has(lower(explicit))) return explicit;
+  // Existing sheets did not have a Trainer column. For New Reps only, use the
+  // current Team Lead as a safe backwards-compatible assignment.
+  const teamLead = clean(agent.teamLead);
+  if (lower(agent.repType) === "new rep" && teamLead && trainerNames.has(lower(teamLead))) return teamLead;
+  return "";
+}
+
+function storeGroup(members, kind, index) {
+  const memberRows = members.map((member) => ({
+    ...member,
+    production: overallProduction(member),
+    trainer: clean(member.trainer),
+  }));
+  const production = Math.round(memberRows.reduce((sum, member) => sum + member.production, 0) * 10) / 10;
+  return {
+    id: crypto.randomUUID(),
+    name: `Store ${index + 1}`,
+    kind,
+    priority: index + 1,
+    production,
+    members: memberRows,
+  };
+}
+
+function standardStoreChunks(reps) {
+  if (reps.length <= 3) return reps.length ? [reps] : [];
+  const chunks = [];
+  let cursor = 0;
+  // Preserve the normal two-person store while avoiding a leftover solo rep.
+  const pairUntil = reps.length % 2 === 1 ? reps.length - 3 : reps.length;
+  while (cursor < pairUntil) {
+    chunks.push(reps.slice(cursor, cursor + 2));
+    cursor += 2;
+  }
+  if (cursor < reps.length) chunks.push(reps.slice(cursor));
+  return chunks;
+}
+
+export function generateStoreGroups(agents = []) {
+  const present = (agents || []).filter(isPresent);
+  const trainers = present
+    .filter((agent) => TRAINER_TYPES.has(lower(agent.repType)))
+    .sort((a, b) => overallProduction(b) - overallProduction(a) || clean(a.repName).localeCompare(clean(b.repName)));
+  const trainerNames = new Set(trainers.map((agent) => lower(agent.repName)));
+  const trainerByName = new Map(trainers.map((agent) => [lower(agent.repName), agent]));
+  const regularReps = present.filter((agent) => !TRAINER_TYPES.has(lower(agent.repType)) && lower(agent.repType) !== "absent");
+  const traineesByTrainer = new Map();
+  const remaining = [];
+
+  for (const rep of regularReps) {
+    const trainerName = trainerNameFor(rep, trainerNames);
+    if (!trainerName) {
+      remaining.push(rep);
+      continue;
+    }
+    const key = lower(trainerName);
+    if (!traineesByTrainer.has(key)) traineesByTrainer.set(key, []);
+    traineesByTrainer.get(key).push({ ...rep, trainer: trainerByName.get(key)?.repName || trainerName });
+  }
+
+  const trainingStores = [];
+  const usedTrainerKeys = new Set();
+  for (const trainer of trainers) {
+    const key = lower(trainer.repName);
+    const trainees = (traineesByTrainer.get(key) || [])
+      .sort((a, b) => overallProduction(b) - overallProduction(a) || clean(a.repName).localeCompare(clean(b.repName)));
+    if (!trainees.length) {
+      remaining.push(trainer);
+      continue;
+    }
+    trainingStores.push([trainer, ...trainees.slice(0, 2)]);
+    remaining.push(...trainees.slice(2));
+    usedTrainerKeys.add(trainer.repKey);
+  }
+
+  // A stale text assignment should never make a rep disappear.
+  for (const [key, trainees] of traineesByTrainer.entries()) {
+    if (!trainerByName.has(key)) remaining.push(...trainees);
+  }
+
+  trainingStores.sort((a, b) => {
+    const aScore = a.reduce((sum, rep) => sum + overallProduction(rep), 0);
+    const bScore = b.reduce((sum, rep) => sum + overallProduction(rep), 0);
+    return bScore - aScore || clean(a[0]?.repName).localeCompare(clean(b[0]?.repName));
+  });
+
+  const remainingUnique = [...new Map(
+    remaining
+      .filter((rep) => !usedTrainerKeys.has(rep.repKey))
+      .map((rep) => [rep.repKey || lower(rep.repName), rep])
+  ).values()].sort((a, b) => overallProduction(b) - overallProduction(a) || clean(a.repName).localeCompare(clean(b.repName)));
+
+  const ordered = [
+    ...trainingStores.map((members) => ({ members, kind: "Trainer / trainee" })),
+    ...standardStoreChunks(remainingUnique).map((members) => ({ members, kind: members.length === 1 ? "Solo" : members.length === 3 ? "Three-person" : "Production" })),
+  ];
+
+  return ordered.map((group, index) => storeGroup(group.members, group.kind, index));
+}

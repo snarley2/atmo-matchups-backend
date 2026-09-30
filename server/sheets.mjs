@@ -8,6 +8,7 @@ const agentsTab = process.env.AGENTS_SHEET_NAME || "Agents";
 const gapsTab = process.env.TEAM_GAPS_SHEET_NAME || "Team/Rep Gaps";
 const matchupsTab = process.env.MATCHUPS_SHEET_NAME || "Daily Matchups";
 const matchupDraftTab = process.env.MATCHUP_DRAFT_SHEET_NAME || "Matchup Draft";
+const storeMatchupsTab = process.env.STORE_MATCHUPS_SHEET_NAME || "Store Matchups";
 const lastWorkedTab = process.env.GOOGLE_SHEET_TAB || "Last Worked";
 const lastWorkedHistoryTab = process.env.LAST_WORKED_HISTORY_SHEET_NAME || "Last Worked History";
 const currentWeekTab = process.env.CURRENT_WEEK_SHEET_TAB || "Current Week Avg";
@@ -18,7 +19,7 @@ const fieldNotesTab = process.env.FIELD_NOTES_SHEET_NAME || "Field Notes";
 const manualNumbersTab = process.env.MANUAL_NUMBERS_SHEET_NAME || "Manual Numbers";
 const suggestionsTab = process.env.SUGGESTIONS_SHEET_NAME || "Suggestions";
 
-const AGENT_HEADERS = ["repKey", "repName", "office", "repType", "team", "teamLead", "attendance", "experienceLevel"];
+const AGENT_HEADERS = ["repKey", "repName", "office", "repType", "team", "teamLead", "trainer", "attendance", "experienceLevel"];
 
 function credentialsPath() {
   const configured = process.env.GOOGLE_SERVICE_ACCOUNT_FILE || process.env.GOOGLE_APPLICATION_CREDENTIALS;
@@ -236,6 +237,90 @@ export async function saveDraftMatchups({ date, groups }) {
 export async function getDraftMatchups() {
   const tab = await readTab(matchupDraftTab);
   return rowsToMatchups(tab.rows);
+}
+
+const STORE_MATCHUP_HEADERS = [
+  "Date", "Priority", "Store ID", "Store", "Type", "Store Production",
+  "Rep Key", "Rep Name", "Team", "Trainer", "Rep Production", "Updated At",
+];
+
+function storeMatchupRows({ date, groups, updatedAt = new Date().toISOString() }) {
+  return (groups || []).flatMap((group, groupIndex) => {
+    const members = Array.isArray(group.members) ? group.members : [];
+    const base = [
+      date || "",
+      Number(group.priority) || groupIndex + 1,
+      group.id || `store-${groupIndex + 1}`,
+      group.name || `Store ${groupIndex + 1}`,
+      group.kind || "Production",
+      Number(group.production) || 0,
+    ];
+    if (!members.length) return [[...base, "", "", "", "", 0, updatedAt]];
+    return members.map((member) => [
+      ...base,
+      member.repKey || "",
+      member.repName || "",
+      member.team || "",
+      member.trainer || "",
+      Number(member.production) || 0,
+      updatedAt,
+    ]);
+  });
+}
+
+function rowsToStoreMatchups(rows = []) {
+  const groups = [];
+  const byId = new Map();
+  let date = "";
+  let updatedAt = "";
+  for (const row of rows) {
+    date ||= String(row[0] || "");
+    updatedAt = String(row[11] || updatedAt || "");
+    const id = String(row[2] || row[3] || `store-${groups.length + 1}`);
+    let group = byId.get(id);
+    if (!group) {
+      group = {
+        id,
+        priority: Number(row[1]) || groups.length + 1,
+        name: String(row[3] || `Store ${groups.length + 1}`),
+        kind: String(row[4] || "Production"),
+        production: Number(row[5]) || 0,
+        members: [],
+      };
+      byId.set(id, group);
+      groups.push(group);
+    }
+    if (row[6] || row[7]) {
+      group.members.push({
+        repKey: String(row[6] || ""),
+        repName: String(row[7] || ""),
+        team: String(row[8] || ""),
+        trainer: String(row[9] || ""),
+        production: Number(row[10]) || 0,
+      });
+    }
+  }
+  return { date, groups: groups.sort((a, b) => a.priority - b.priority), updatedAt };
+}
+
+export async function saveStoreMatchups({ date, groups }) {
+  const client = await sheetsClient();
+  await ensureTab(client, storeMatchupsTab, STORE_MATCHUP_HEADERS);
+  const updatedAt = new Date().toISOString();
+  const rows = storeMatchupRows({ date, groups, updatedAt });
+  await clearEntireTab(client, storeMatchupsTab);
+  await client.spreadsheets.values.update({
+    spreadsheetId,
+    range: `'${storeMatchupsTab}'!A1`,
+    valueInputOption: "RAW",
+    requestBody: { values: [STORE_MATCHUP_HEADERS, ...rows] },
+  });
+  return { date, groups, updatedAt };
+}
+
+export async function getStoreMatchups() {
+  const tab = await readTab(storeMatchupsTab);
+  return rowsToStoreMatchups(tab.rows);
 }
 
 

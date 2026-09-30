@@ -5,8 +5,8 @@ import { Server as SocketIOServer } from "socket.io";
 import cors from "cors";
 import crypto from "node:crypto";
 import cron from "node-cron";
-import { getAgents, replaceAgents, getGaps, getPerformanceTabs, saveMatchups, getDraftMatchups, saveDraftMatchups, getFinalMatchups, getFieldNotes, addFieldNote, getManualNumbers, upsertManualNumbers, getSuggestions, addSuggestion, getNumbersTracking } from "./sheets.mjs";
-import { combineAgentsAndGaps, generateGroups } from "./logic.mjs";
+import { getAgents, replaceAgents, getGaps, getPerformanceTabs, saveMatchups, getDraftMatchups, saveDraftMatchups, getFinalMatchups, saveStoreMatchups, getStoreMatchups, getFieldNotes, addFieldNote, getManualNumbers, upsertManualNumbers, getSuggestions, addSuggestion, getNumbersTracking } from "./sheets.mjs";
+import { combineAgentsAndGaps, generateGroups, generateStoreGroups } from "./logic.mjs";
 import { runDailyAutomation, isDailyAutomationRunning } from "../run.mjs";
 
 const app = express();
@@ -307,6 +307,7 @@ app.post("/api/agents", requireAdmin, async (req, res, next) => {
       repType: String(req.body.repType || "New Rep").trim(),
       team: String(req.body.team || "").trim(),
       teamLead: String(req.body.teamLead || "").trim(),
+      trainer: String(req.body.trainer || "").trim(),
       attendance: String(req.body.attendance || "in").trim().toLowerCase(),
       experienceLevel:
         String(req.body.repType || "New Rep").trim().toLowerCase() === "leader"
@@ -381,6 +382,26 @@ app.post("/api/matchups", requireAdmin, async (req, res, next) => {
     const date = String(req.body.date || new Date().toISOString().slice(0, 10));
     const groups = Array.isArray(req.body.groups) ? req.body.groups : [];
     res.json(await saveMatchups({ date, groups }));
+  } catch (error) { next(error); }
+});
+
+app.post("/api/store-matchups/generate", requireAdmin, async (_req, res, next) => {
+  try {
+    const [agents, gaps, performance] = await Promise.all([getAgents(), getGaps(), getPerformanceTabs()]);
+    const combined = combineAgentsAndGaps(agents, gaps, performance);
+    res.json({ groups: generateStoreGroups(combined) });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/store-matchups", async (_req, res, next) => {
+  try { res.json(await getStoreMatchups()); } catch (error) { next(error); }
+});
+
+app.post("/api/store-matchups", requireAdmin, async (req, res, next) => {
+  try {
+    const date = String(req.body.date || easternDateParts().date);
+    const groups = Array.isArray(req.body.groups) ? req.body.groups : [];
+    res.json(await saveStoreMatchups({ date, groups }));
   } catch (error) { next(error); }
 });
 
