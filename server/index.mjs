@@ -7,6 +7,7 @@ import crypto from "node:crypto";
 import cron from "node-cron";
 import { getAgents, replaceAgents, getGaps, getPerformanceTabs, saveMatchups, getDraftMatchups, saveDraftMatchups, getFinalMatchups, saveStoreMatchups, getStoreMatchups, getFieldNotes, addFieldNote, getManualNumbers, upsertManualNumbers, getSuggestions, addSuggestion, getNumbersTracking } from "./sheets.mjs";
 import { combineAgentsAndGaps, generateGroups, generateStoreGroups, STORE_CATALOG } from "./logic.mjs";
+import { attachProductionCsv } from "./production-csv.mjs";
 import { runDailyAutomation, isDailyAutomationRunning } from "../run.mjs";
 
 const app = express();
@@ -150,6 +151,31 @@ io.on("connection", (socket) => {
     });
   });
 
+  socket.on("stores:state", (payload = {}) => {
+    if (!socket.data.admin) return;
+    const stores = Array.isArray(payload.stores) ? payload.stores : [];
+    socket.broadcast.emit("stores:state", {
+      stores,
+      actor: sanitizeLiveName(payload.actor || socket.data.actor),
+      action: String(payload.action || "updated the store board").slice(0, 180),
+      at: payload.at || new Date().toISOString(),
+    });
+  });
+
+  for (const eventName of ["store-drag:start", "store-drag:move", "store-drag:end"]) {
+    socket.on(eventName, (payload = {}) => {
+      if (!socket.data.admin) return;
+      const message = {
+        ...payload,
+        socketId: socket.id,
+        actor: sanitizeLiveName(payload.actor || socket.data.actor),
+        at: new Date().toISOString(),
+      };
+      if (eventName === "store-drag:move") socket.broadcast.volatile.emit(eventName, message);
+      else socket.broadcast.emit(eventName, message);
+    });
+  }
+
   socket.on("drag:start", (payload = {}) => {
     if (!socket.data.admin) return;
     socket.broadcast.emit("drag:start", {
@@ -177,6 +203,7 @@ io.on("connection", (socket) => {
 
   socket.on("disconnect", () => {
     socket.broadcast.emit("drag:end", { socketId: socket.id });
+    socket.broadcast.emit("store-drag:end", { socketId: socket.id });
     console.log(`[live] disconnected ${socket.id} (${socket.data.actor})`);
   });
 });
@@ -231,7 +258,7 @@ async function buildBootstrap() {
   }
 
   return {
-    agents: combineAgentsAndGaps(agents, gaps, performance),
+    agents: combineAgentsAndGaps(attachProductionCsv(agents), gaps, performance),
     draft,
   };
 }
@@ -328,6 +355,7 @@ app.put("/api/agents/:repKey", requireAdmin, async (req, res, next) => {
     if (index < 0) return res.status(404).json({ error: "Agent not found" });
     agents[index] = { ...agents[index], ...req.body, repKey: agents[index].repKey };
     await replaceAgents(agents);
+    io.emit("agents:update", agents[index]);
     res.json(agents[index]);
   } catch (error) { next(error); }
 });
@@ -388,7 +416,7 @@ app.post("/api/matchups", requireAdmin, async (req, res, next) => {
 app.post("/api/store-matchups/generate", requireAdmin, async (_req, res, next) => {
   try {
     const [agents, gaps, performance] = await Promise.all([getAgents(), getGaps(), getPerformanceTabs()]);
-    const combined = combineAgentsAndGaps(agents, gaps, performance);
+    const combined = combineAgentsAndGaps(attachProductionCsv(agents), gaps, performance);
     res.json({ groups: generateStoreGroups(combined) });
   } catch (error) { next(error); }
 });
@@ -405,7 +433,14 @@ app.post("/api/store-matchups", requireAdmin, async (req, res, next) => {
   try {
     const date = String(req.body.date || easternDateParts().date);
     const groups = Array.isArray(req.body.groups) ? req.body.groups : [];
-    res.json(await saveStoreMatchups({ date, groups }));
+    const saved = await saveStoreMatchups({ date, groups });
+    io.emit("stores:state", {
+      stores: groups,
+      actor: sanitizeLiveName(req.body.actor || req.admin?.repName || "Server"),
+      action: String(req.body.action || "saved the live store board").slice(0, 180),
+      at: new Date().toISOString(),
+    });
+    res.json(saved);
   } catch (error) { next(error); }
 });
 

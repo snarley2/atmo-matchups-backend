@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 
 const TRAINER_TYPES = new Set(["trainer", "manager"]);
 const BLOCKED_REP_TYPES = new Set(["trainer", "manager", "absent"]);
+const STORE_MENTOR_TYPES = new Set(["leader", "trainer", "manager", "admin", "owner", "director"]);
 export const STORE_CATALOG = [
   { id: "walmart-carnegie", name: "Walmart- Carnegie", storeNumber: "5040", staffing: "Grocery", manager: "Lori", tier: "green" },
   { id: "walmart-gibsonia", name: "Walmart- Gibsonia", storeNumber: "", staffing: "Back of grocery", manager: "", tier: "yellow" },
@@ -492,6 +493,8 @@ function periodProduction(agent, period) {
 }
 
 export function overallProduction(agent) {
+  const csvOverall = Number(agent?.productionCsv?.overall);
+  if (Number.isFinite(csvOverall)) return Math.round(csvOverall * 10) / 10;
   const weekly = STORE_PRODUCTION_PERIODS
     .map((period) => periodProduction(agent, period))
     .filter((value) => value > 0);
@@ -500,12 +503,12 @@ export function overallProduction(agent) {
 }
 
 function trainerNameFor(agent, trainerNames) {
+  // Store training follows the Agents sheet's Team Lead column. The older
+  // Trainer column remains readable only as a backwards-compatible fallback.
+  const teamLead = clean(agent.teamLead);
+  if (teamLead && trainerNames.has(lower(teamLead))) return teamLead;
   const explicit = clean(agent.trainer);
   if (explicit && trainerNames.has(lower(explicit))) return explicit;
-  // Existing sheets did not have a Trainer column. For New Reps only, use the
-  // current Team Lead as a safe backwards-compatible assignment.
-  const teamLead = clean(agent.teamLead);
-  if (lower(agent.repType) === "new rep" && teamLead && trainerNames.has(lower(teamLead))) return teamLead;
   return "";
 }
 
@@ -513,7 +516,7 @@ function storeGroup(members, kind, index) {
   const memberRows = members.map((member) => ({
     ...member,
     production: overallProduction(member),
-    trainer: clean(member.trainer),
+    trainer: clean(member.teamLead || member.trainer),
   }));
   const production = Math.round(memberRows.reduce((sum, member) => sum + member.production, 0) * 10) / 10;
   const store = STORE_CATALOG[index] || {};
@@ -548,11 +551,11 @@ function standardStoreChunks(reps) {
 export function generateStoreGroups(agents = []) {
   const present = (agents || []).filter(isPresent);
   const trainers = present
-    .filter((agent) => TRAINER_TYPES.has(lower(agent.repType)))
+    .filter((agent) => STORE_MENTOR_TYPES.has(lower(agent.repType)))
     .sort((a, b) => overallProduction(b) - overallProduction(a) || clean(a.repName).localeCompare(clean(b.repName)));
   const trainerNames = new Set(trainers.map((agent) => lower(agent.repName)));
   const trainerByName = new Map(trainers.map((agent) => [lower(agent.repName), agent]));
-  const regularReps = present.filter((agent) => !TRAINER_TYPES.has(lower(agent.repType)) && lower(agent.repType) !== "absent");
+  const regularReps = present.filter((agent) => !STORE_MENTOR_TYPES.has(lower(agent.repType)) && lower(agent.repType) !== "absent");
   const traineesByTrainer = new Map();
   const remaining = [];
 
