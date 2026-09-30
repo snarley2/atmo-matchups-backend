@@ -240,7 +240,8 @@ export async function getDraftMatchups() {
 }
 
 const STORE_MATCHUP_HEADERS = [
-  "Date", "Priority", "Store ID", "Store", "Type", "Store Production",
+  "Date", "Priority", "Store ID", "Store Locator", "Store #", "Tier",
+  "Where to Staff", "Store Manager", "Type", "Store Production",
   "Rep Key", "Rep Name", "Team", "Trainer", "Rep Production", "Updated At",
 ];
 
@@ -252,6 +253,10 @@ function storeMatchupRows({ date, groups, updatedAt = new Date().toISOString() }
       Number(group.priority) || groupIndex + 1,
       group.id || `store-${groupIndex + 1}`,
       group.name || `Store ${groupIndex + 1}`,
+      group.storeNumber || "",
+      group.tier || "neutral",
+      group.staffing || "",
+      group.manager || "",
       group.kind || "Production",
       Number(group.production) || 0,
     ];
@@ -268,14 +273,17 @@ function storeMatchupRows({ date, groups, updatedAt = new Date().toISOString() }
   });
 }
 
-function rowsToStoreMatchups(rows = []) {
+function rowsToStoreMatchups(tab = {}) {
+  const headers = tab.headers || [];
+  const rows = tab.rows || [];
+  const modern = headers.includes("Store Locator");
   const groups = [];
   const byId = new Map();
   let date = "";
   let updatedAt = "";
   for (const row of rows) {
     date ||= String(row[0] || "");
-    updatedAt = String(row[11] || updatedAt || "");
+    updatedAt = String(row[modern ? 15 : 11] || updatedAt || "");
     const id = String(row[2] || row[3] || `store-${groups.length + 1}`);
     let group = byId.get(id);
     if (!group) {
@@ -283,20 +291,25 @@ function rowsToStoreMatchups(rows = []) {
         id,
         priority: Number(row[1]) || groups.length + 1,
         name: String(row[3] || `Store ${groups.length + 1}`),
-        kind: String(row[4] || "Production"),
-        production: Number(row[5]) || 0,
+        storeNumber: modern ? String(row[4] || "") : "",
+        tier: modern ? String(row[5] || "neutral") : "neutral",
+        staffing: modern ? String(row[6] || "") : "",
+        manager: modern ? String(row[7] || "") : "",
+        kind: String(row[modern ? 8 : 4] || "Production"),
+        production: Number(row[modern ? 9 : 5]) || 0,
         members: [],
       };
       byId.set(id, group);
       groups.push(group);
     }
-    if (row[6] || row[7]) {
+    const memberOffset = modern ? 10 : 6;
+    if (row[memberOffset] || row[memberOffset + 1]) {
       group.members.push({
-        repKey: String(row[6] || ""),
-        repName: String(row[7] || ""),
-        team: String(row[8] || ""),
-        trainer: String(row[9] || ""),
-        production: Number(row[10]) || 0,
+        repKey: String(row[memberOffset] || ""),
+        repName: String(row[memberOffset + 1] || ""),
+        team: String(row[memberOffset + 2] || ""),
+        trainer: String(row[memberOffset + 3] || ""),
+        production: Number(row[memberOffset + 4]) || 0,
       });
     }
   }
@@ -320,7 +333,7 @@ export async function saveStoreMatchups({ date, groups }) {
 
 export async function getStoreMatchups() {
   const tab = await readTab(storeMatchupsTab);
-  return rowsToStoreMatchups(tab.rows);
+  return rowsToStoreMatchups(tab);
 }
 
 

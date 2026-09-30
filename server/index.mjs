@@ -6,7 +6,7 @@ import cors from "cors";
 import crypto from "node:crypto";
 import cron from "node-cron";
 import { getAgents, replaceAgents, getGaps, getPerformanceTabs, saveMatchups, getDraftMatchups, saveDraftMatchups, getFinalMatchups, saveStoreMatchups, getStoreMatchups, getFieldNotes, addFieldNote, getManualNumbers, upsertManualNumbers, getSuggestions, addSuggestion, getNumbersTracking } from "./sheets.mjs";
-import { combineAgentsAndGaps, generateGroups, generateStoreGroups } from "./logic.mjs";
+import { combineAgentsAndGaps, generateGroups, generateStoreGroups, STORE_CATALOG } from "./logic.mjs";
 import { runDailyAutomation, isDailyAutomationRunning } from "../run.mjs";
 
 const app = express();
@@ -391,6 +391,10 @@ app.post("/api/store-matchups/generate", requireAdmin, async (_req, res, next) =
     const combined = combineAgentsAndGaps(agents, gaps, performance);
     res.json({ groups: generateStoreGroups(combined) });
   } catch (error) { next(error); }
+});
+
+app.get("/api/store-matchups/catalog", (_req, res) => {
+  res.json({ stores: STORE_CATALOG });
 });
 
 app.get("/api/store-matchups", async (_req, res, next) => {
