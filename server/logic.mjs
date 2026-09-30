@@ -493,8 +493,8 @@ function periodProduction(agent, period) {
 }
 
 export function overallProduction(agent) {
-  const csvOverall = Number(agent?.productionCsv?.overall);
-  if (Number.isFinite(csvOverall)) return Math.round(csvOverall * 10) / 10;
+  const logOverall = Number(agent?.productionLog?.overall);
+  if (Number.isFinite(logOverall)) return Math.round(logOverall * 10) / 10;
   const weekly = STORE_PRODUCTION_PERIODS
     .map((period) => periodProduction(agent, period))
     .filter((value) => value > 0);
@@ -555,11 +555,13 @@ export function generateStoreGroups(agents = []) {
     .sort((a, b) => overallProduction(b) - overallProduction(a) || clean(a.repName).localeCompare(clean(b.repName)));
   const trainerNames = new Set(trainers.map((agent) => lower(agent.repName)));
   const trainerByName = new Map(trainers.map((agent) => [lower(agent.repName), agent]));
-  const regularReps = present.filter((agent) => !STORE_MENTOR_TYPES.has(lower(agent.repType)) && lower(agent.repType) !== "absent");
+  const newReps = present.filter((agent) => lower(agent.repType) === "new rep");
   const traineesByTrainer = new Map();
-  const remaining = [];
+  // Only New Reps are placed in Team Lead training stores. Other non-mentor
+  // roles stay in the normal production-ranked pool.
+  const remaining = present.filter((agent) => !STORE_MENTOR_TYPES.has(lower(agent.repType)) && lower(agent.repType) !== "new rep" && lower(agent.repType) !== "absent");
 
-  for (const rep of regularReps) {
+  for (const rep of newReps) {
     const trainerName = trainerNameFor(rep, trainerNames);
     if (!trainerName) {
       remaining.push(rep);

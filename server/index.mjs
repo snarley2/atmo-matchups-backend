@@ -7,7 +7,7 @@ import crypto from "node:crypto";
 import cron from "node-cron";
 import { getAgents, replaceAgents, getGaps, getPerformanceTabs, saveMatchups, getDraftMatchups, saveDraftMatchups, getFinalMatchups, saveStoreMatchups, getStoreMatchups, getFieldNotes, addFieldNote, getManualNumbers, upsertManualNumbers, getSuggestions, addSuggestion, getNumbersTracking } from "./sheets.mjs";
 import { combineAgentsAndGaps, generateGroups, generateStoreGroups, STORE_CATALOG } from "./logic.mjs";
-import { attachProductionCsv } from "./production-csv.mjs";
+import { attachProductionLogs } from "./production-csv.mjs";
 import { runDailyAutomation, isDailyAutomationRunning } from "../run.mjs";
 
 const app = express();
@@ -258,7 +258,7 @@ async function buildBootstrap() {
   }
 
   return {
-    agents: combineAgentsAndGaps(attachProductionCsv(agents), gaps, performance),
+    agents: combineAgentsAndGaps(attachProductionLogs(agents), gaps, performance),
     draft,
   };
 }
@@ -416,7 +416,7 @@ app.post("/api/matchups", requireAdmin, async (req, res, next) => {
 app.post("/api/store-matchups/generate", requireAdmin, async (_req, res, next) => {
   try {
     const [agents, gaps, performance] = await Promise.all([getAgents(), getGaps(), getPerformanceTabs()]);
-    const combined = combineAgentsAndGaps(attachProductionCsv(agents), gaps, performance);
+    const combined = combineAgentsAndGaps(attachProductionLogs(agents), gaps, performance);
     res.json({ groups: generateStoreGroups(combined) });
   } catch (error) { next(error); }
 });

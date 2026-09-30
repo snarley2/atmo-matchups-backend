@@ -3,7 +3,7 @@ import path from "node:path";
 
 const productionDir = path.resolve(process.cwd(), process.env.PRODUCTION_LOG_DIR || "prod_logs");
 
-function parseCsv(text) {
+function parseDelimited(text, delimiter) {
   const rows = [];
   let row = [], field = "", quoted = false;
   for (let index = 0; index < text.length; index += 1) {
@@ -13,7 +13,7 @@ function parseCsv(text) {
       else if (char === '"') quoted = false;
       else field += char;
     } else if (char === '"') quoted = true;
-    else if (char === ",") { row.push(field); field = ""; }
+    else if (char === delimiter) { row.push(field); field = ""; }
     else if (char === "\n") { row.push(field.replace(/\r$/, "")); rows.push(row); row = []; field = ""; }
     else field += char;
   }
@@ -93,19 +93,24 @@ function parseStandardLog(rows, fileName) {
   });
 }
 
-export function getProductionCsvRecords() {
+export function getProductionLogRecords() {
   if (!fs.existsSync(productionDir)) return [];
-  const files = fs.readdirSync(productionDir).filter((name) => name.toLowerCase().endsWith(".csv") && !/daily plan/i.test(name)).sort();
+  const allFiles = fs.readdirSync(productionDir).filter((name) => !/daily plan/i.test(name));
+  const tsvFiles = allFiles.filter((name) => name.toLowerCase().endsWith(".tsv"));
+  // TSV is authoritative. CSV is only a backwards-compatible fallback when
+  // there are no TSV exports in prod_logs.
+  const files = (tsvFiles.length ? tsvFiles : allFiles.filter((name) => name.toLowerCase().endsWith(".csv"))).sort();
   return files.flatMap((fileName) => {
-    const rows = parseCsv(fs.readFileSync(path.join(productionDir, fileName), "utf8").replace(/^\uFEFF/, ""));
+    const delimiter = fileName.toLowerCase().endsWith(".tsv") ? "\t" : ",";
+    const rows = parseDelimited(fs.readFileSync(path.join(productionDir, fileName), "utf8").replace(/^\uFEFF/, ""), delimiter);
     return rows.some((row) => String(row[0] || "").trim().toLowerCase() === "rep name")
       ? parseAiLog(rows, fileName)
       : parseStandardLog(rows, fileName);
   });
 }
 
-export function attachProductionCsv(agents = []) {
-  const records = getProductionCsvRecords();
+export function attachProductionLogs(agents = []) {
+  const records = getProductionLogRecords();
   const byName = new Map();
   for (const record of records) for (const key of record.keys) {
     const existing = byName.get(key);
@@ -113,7 +118,7 @@ export function attachProductionCsv(agents = []) {
   }
   return agents.map((agent) => {
     const record = nameKeys(agent.repName).map((key) => byName.get(key)).find(Boolean);
-    return { ...agent, productionCsv: record ? {
+    return { ...agent, productionLog: record ? {
       current: record.current,
       lastWeek: record.lastWeek,
       twoWeeksAgo: record.twoWeeksAgo,
