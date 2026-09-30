@@ -36,7 +36,7 @@ function nameKeys(value) {
     .replace(/[↓↑]/g, "")
     .replace(/^--|--$/g, "")
     .trim();
-  if (!clean || /team\s*$/i.test(clean)) return [];
+  if (!clean || /team\s*$/i.test(clean) || /(?:daily|weekly|office)?\s*totals?$/i.test(clean)) return [];
   const normalize = (name) => name.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, "");
   const keys = [normalize(clean)];
   if (clean.includes(",")) {
@@ -46,9 +46,16 @@ function nameKeys(value) {
   return [...new Set(keys.filter(Boolean))];
 }
 
-function average(values) {
-  const available = values.filter((value) => Number.isFinite(value));
-  return available.length ? Math.round((available.reduce((sum, value) => sum + value, 0) / available.length) * 10) / 10 : 0;
+function nameAliases(value) {
+  let clean = String(value || "").replace(/[↓↑]/g, "").trim();
+  if (clean.includes(",")) {
+    const [last, ...rest] = clean.split(",");
+    clean = `${rest.join(" ")} ${last}`.trim();
+  }
+  const words = clean.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().match(/[a-z0-9]+/g) || [];
+  if (!words.length) return [];
+  const first = words[0], last = words.at(-1);
+  return [...new Set([first, words.length > 1 ? `${first}${last[0]}` : "", words.length > 1 ? `${first[0]}${last}` : ""].filter(Boolean))];
 }
 
 function parseAiLog(rows, fileName) {
@@ -68,7 +75,7 @@ function parseAiLog(rows, fileName) {
     const current = currentIndex >= 0 ? number(row[currentIndex]) + partials * 0.5 : null;
     const lastWeek = lastIndex >= 0 && String(row[lastIndex] || "").trim() !== "" ? number(row[lastIndex]) : null;
     const twoWeeksAgo = twoIndex >= 0 && String(row[twoIndex] || "").trim() !== "" ? number(row[twoIndex]) : null;
-    return [{ repName: repName.replace(/[↓↑]/g, "").trim(), keys, current, lastWeek, twoWeeksAgo, overall: average([current, lastWeek, twoWeeksAgo]), partials, sourceFile: fileName }];
+    return [{ repName: repName.replace(/[↓↑]/g, "").trim(), keys, aliases: nameAliases(repName), current, lastWeek, twoWeeksAgo, overall: current, partials, sourceFile: fileName }];
   });
 }
 
@@ -89,20 +96,17 @@ function parseStandardLog(rows, fileName) {
     const current = Number.isInteger(totalElectricIndex) ? number(row[totalElectricIndex]) + partials * 0.5 : null;
     const lastWeek = prevIndex >= 0 ? weeklyElectric(row[prevIndex]) : null;
     const twoWeeksAgo = twoIndex >= 0 ? weeklyElectric(row[twoIndex]) : null;
-    return [{ repName, keys, current, lastWeek, twoWeeksAgo, overall: average([current, lastWeek, twoWeeksAgo]), partials, sourceFile: fileName }];
+    return [{ repName, keys, aliases: nameAliases(repName), current, lastWeek, twoWeeksAgo, overall: current, partials, sourceFile: fileName }];
   });
 }
 
 export function getProductionLogRecords() {
   if (!fs.existsSync(productionDir)) return [];
-  const allFiles = fs.readdirSync(productionDir).filter((name) => !/daily plan/i.test(name));
-  const tsvFiles = allFiles.filter((name) => name.toLowerCase().endsWith(".tsv"));
-  // TSV is authoritative. CSV is only a backwards-compatible fallback when
-  // there are no TSV exports in prod_logs.
-  const files = (tsvFiles.length ? tsvFiles : allFiles.filter((name) => name.toLowerCase().endsWith(".csv"))).sort();
+  // Stores intentionally use TSV production logs only. Do not fall back to
+  // CSV files, WorkMyT data, or stored app performance.
+  const files = fs.readdirSync(productionDir).filter((name) => name.toLowerCase().endsWith(".tsv")).sort();
   return files.flatMap((fileName) => {
-    const delimiter = fileName.toLowerCase().endsWith(".tsv") ? "\t" : ",";
-    const rows = parseDelimited(fs.readFileSync(path.join(productionDir, fileName), "utf8").replace(/^\uFEFF/, ""), delimiter);
+    const rows = parseDelimited(fs.readFileSync(path.join(productionDir, fileName), "utf8").replace(/^\uFEFF/, ""), "\t");
     return rows.some((row) => String(row[0] || "").trim().toLowerCase() === "rep name")
       ? parseAiLog(rows, fileName)
       : parseStandardLog(rows, fileName);
@@ -112,12 +116,18 @@ export function getProductionLogRecords() {
 export function attachProductionLogs(agents = []) {
   const records = getProductionLogRecords();
   const byName = new Map();
+  const aliasBuckets = new Map();
   for (const record of records) for (const key of record.keys) {
     const existing = byName.get(key);
     if (!existing || record.overall > existing.overall) byName.set(key, record);
   }
+  for (const record of records) for (const alias of record.aliases || []) {
+    if (!aliasBuckets.has(alias)) aliasBuckets.set(alias, []);
+    aliasBuckets.get(alias).push(record);
+  }
+  const uniqueAliases = new Map([...aliasBuckets].filter(([,matches]) => matches.length === 1).map(([alias,matches]) => [alias,matches[0]]));
   return agents.map((agent) => {
-    const record = nameKeys(agent.repName).map((key) => byName.get(key)).find(Boolean);
+    const record = nameKeys(agent.repName).map((key) => byName.get(key)).find(Boolean) || nameAliases(agent.repName).map((key) => uniqueAliases.get(key)).find(Boolean);
     return { ...agent, productionLog: record ? {
       current: record.current,
       lastWeek: record.lastWeek,

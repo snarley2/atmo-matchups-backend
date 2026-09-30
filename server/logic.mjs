@@ -481,25 +481,9 @@ export function generateGroups(agents, options = {}) {
   return assignLeaders(groups, agents, trainersOnly);
 }
 
-const STORE_PRODUCTION_PERIODS = ["currentWeek", "lastWeek", "twoWeeksAgo", "threeWeeksAgo"];
-
-function periodProduction(agent, period) {
-  const counts = agent.performance?.[period]?.counts || {};
-  const electric = Number(counts.electric) || 0;
-  const partial = Number(counts.electricPartial) || 0;
-  const close = Number(counts.close) || 0;
-  if (electric > 0 || partial > 0) return electric + partial * 0.5;
-  return close;
-}
-
 export function overallProduction(agent) {
-  const logOverall = Number(agent?.productionLog?.overall);
-  if (Number.isFinite(logOverall)) return Math.round(logOverall * 10) / 10;
-  const weekly = STORE_PRODUCTION_PERIODS
-    .map((period) => periodProduction(agent, period))
-    .filter((value) => value > 0);
-  if (!weekly.length) return 0;
-  return Math.round((weekly.reduce((sum, value) => sum + value, 0) / weekly.length) * 10) / 10;
+  const currentTsvProduction = Number(agent?.productionLog?.current);
+  return Number.isFinite(currentTsvProduction) ? Math.round(currentTsvProduction * 10) / 10 : 0;
 }
 
 function trainerNameFor(agent, trainerNames) {
