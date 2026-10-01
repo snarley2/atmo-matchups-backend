@@ -2,6 +2,7 @@ import process from "node:process";
 import crypto from "node:crypto";
 import dotenv from "dotenv";
 import { google } from "googleapis";
+import { DEFAULT_OFFICE, canonicalOffice, officeRecordKey } from "./offices.mjs";
 
 dotenv.config();
 
@@ -9,7 +10,7 @@ const SPREADSHEET_ID =
   process.env.GOOGLE_SHEET_ID || "1iV9tUK8fIVHPrkR7PlaOzIkBAdR6kOxWAatOQrzDWMw";
 const SOURCE_SHEET_NAME = process.env.LAST_WORKED_SHEET_NAME || "Last Worked";
 const AGENTS_SHEET_NAME = process.env.AGENTS_SHEET_NAME || "Agents";
-const DEFAULT_OFFICE = process.env.DEFAULT_OFFICE || "MADHAV MEHTA";
+const FALLBACK_OFFICE = process.env.DEFAULT_OFFICE || DEFAULT_OFFICE;
 
 const AGENT_HEADERS = [
   "repKey",
@@ -177,7 +178,10 @@ if (existingRepNameIndex < 0) {
 
 const existingNames = new Set(
   existingRows
-    .map((row) => normalize(row[existingRepNameIndex]))
+    .map((row) => {
+      const existingOfficeIndex = findHeaderIndex(agentsHeaders, ["office", "campaign"]);
+      return officeRecordKey(row[existingRepNameIndex], valueAt(row, existingOfficeIndex) || FALLBACK_OFFICE);
+    })
     .filter(Boolean)
 );
 
@@ -186,9 +190,10 @@ const newAgents = [];
 
 for (const row of sourceRows) {
   const repName = valueAt(row, repNameIndex);
-  const key = normalize(repName);
+  const office = canonicalOffice(valueAt(row, officeIndex) || FALLBACK_OFFICE);
+  const key = officeRecordKey(repName, office);
 
-  if (!key || existingNames.has(key) || seenSourceNames.has(key)) {
+  if (!normalize(repName) || existingNames.has(key) || seenSourceNames.has(key)) {
     continue;
   }
 
@@ -197,7 +202,7 @@ for (const row of sourceRows) {
   newAgents.push({
     repKey: crypto.randomUUID(),
     repName,
-    office: valueAt(row, officeIndex) || DEFAULT_OFFICE,
+    office,
     repType: valueAt(row, repTypeIndex),
     team: valueAt(row, teamIndex),
     teamLead: valueAt(row, teamLeadIndex),

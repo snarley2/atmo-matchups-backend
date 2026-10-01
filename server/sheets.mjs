@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { google } from "googleapis";
+import { DEFAULT_OFFICE, canonicalOffice, officeLabel } from "../offices.mjs";
 
 const spreadsheetId = process.env.GOOGLE_SHEET_ID;
 const agentsTab = process.env.AGENTS_SHEET_NAME || "Agents";
@@ -221,23 +222,28 @@ async function replaceMatchupTab(title, payload) {
   };
 }
 
-export async function saveMatchups({ date, groups }) {
+function officeMatchupTab(baseTitle, office) {
+  const canonical = canonicalOffice(office);
+  return canonical === DEFAULT_OFFICE ? baseTitle : `${baseTitle} - ${officeLabel(canonical)}`;
+}
+
+export async function saveMatchups({ date, groups, office = DEFAULT_OFFICE }) {
   // Final save intentionally wipes every existing row before posting the new matchups.
-  return replaceMatchupTab(matchupsTab, { date, groups });
+  return replaceMatchupTab(officeMatchupTab(matchupsTab, office), { date, groups, office: canonicalOffice(office) });
 }
 
-export async function getFinalMatchups() {
-  const tab = await readTab(matchupsTab);
-  return rowsToMatchups(tab.rows);
+export async function getFinalMatchups(office = DEFAULT_OFFICE) {
+  const tab = await readTab(officeMatchupTab(matchupsTab, office));
+  return { ...rowsToMatchups(tab.rows), office: canonicalOffice(office) };
 }
 
-export async function saveDraftMatchups({ date, groups }) {
-  return replaceMatchupTab(matchupDraftTab, { date, groups });
+export async function saveDraftMatchups({ date, groups, office = DEFAULT_OFFICE }) {
+  return replaceMatchupTab(officeMatchupTab(matchupDraftTab, office), { date, groups, office: canonicalOffice(office) });
 }
 
-export async function getDraftMatchups() {
-  const tab = await readTab(matchupDraftTab);
-  return rowsToMatchups(tab.rows);
+export async function getDraftMatchups(office = DEFAULT_OFFICE) {
+  const tab = await readTab(officeMatchupTab(matchupDraftTab, office));
+  return { ...rowsToMatchups(tab.rows), office: canonicalOffice(office) };
 }
 
 const STORE_MATCHUP_HEADERS = [
@@ -578,15 +584,16 @@ function saturdayWeekStart(ymd) {
   const back = (day - 6 + 7) % 7;
   return addDaysYmd(ymd, -back);
 }
-function manualRow(entry) {
+function manualRow(entry, officeByRepKey = new Map()) {
   return {
     "Rep Name": entry.repName, "Rep Key": entry.repKey,
+    Office: canonicalOffice(officeByRepKey.get(entry.repKey) || DEFAULT_OFFICE),
     Talk: entry.talks, Stop: entry.stops, Zip: entry.zips, Presentation: entry.presentations, Info: entry.info,
     "Electric Sales": entry.electric, "Electric Partials": entry.electricPartial, "Gas Sales": entry.gas,
     Close: entry.electric + entry.electricPartial, "Data Source": "Manual", "Recorded Date": entry.date,
   };
 }
-function sumManual(entries = []) {
+function sumManual(entries = [], officeByRepKey = new Map()) {
   const byRep = new Map();
   for (const entry of entries) {
     const key = String(entry.repKey || entry.repName || "").trim().toLowerCase();
@@ -596,7 +603,7 @@ function sumManual(entries = []) {
     if (entry.date > (current.date || "")) current.date = entry.date;
     byRep.set(key, current);
   }
-  return [...byRep.values()].map(manualRow);
+  return [...byRep.values()].map((entry) => manualRow(entry, officeByRepKey));
 }
 function rowActivity(row = {}) {
   const keys = Object.keys(row);
@@ -606,19 +613,19 @@ function rowActivity(row = {}) {
   return keys.some((key) => wanted.has(normalize(key)) && cleanNumber(row[key]) > 0);
 }
 function mergeWorkMyTFirst(workRows = [], manualRows = []) {
-  const normalize = (v) => String(v || "").trim().toLowerCase();
-  const workNames = new Set(workRows.filter(rowActivity).map((row) => normalize(row["Rep Name"] || row.repName || row.Name)));
-  return [...workRows, ...manualRows.filter((row) => !workNames.has(normalize(row["Rep Name"])))];
+  const workNames = new Set(workRows.filter(rowActivity).map(rowOfficeRepKey));
+  return [...workRows, ...manualRows.filter((row) => !workNames.has(rowOfficeRepKey(row)))];
 }
 function rowRepName(row = {}) { return String(row["Rep Name"] || row.repName || row.Name || "").trim().toLowerCase(); }
+function rowOfficeRepKey(row = {}) { return `${canonicalOffice(row.Office || row.office)}|${rowRepName(row)}`; }
 function rowRecordedDate(row = {}) {
   const candidates = [row["Recorded Date"], row["Last Worked Date"], row["Last Worked"], row.Date, row.date];
   const raw = candidates.find((value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || "").trim()));
   return String(raw || "");
 }
 function mergeLastWorkedWorkMyTFirst(workRows = [], manualRows = []) {
-  const workByName = new Map(workRows.map((row) => [rowRepName(row), row]).filter(([name]) => name));
-  const manualByName = new Map(manualRows.map((row) => [rowRepName(row), row]).filter(([name]) => name));
+  const workByName = new Map(workRows.map((row) => [rowOfficeRepKey(row), row]).filter(([name]) => name));
+  const manualByName = new Map(manualRows.map((row) => [rowOfficeRepKey(row), row]).filter(([name]) => name));
   const names = new Set([...workByName.keys(), ...manualByName.keys()]);
   const merged = [];
   for (const name of names) {
@@ -636,7 +643,7 @@ function mergeLastWorkedWorkMyTFirst(workRows = [], manualRows = []) {
 }
 
 export async function getPerformanceTabs() {
-  const [lastWorked, lastWorkedHistory, currentWeek, lastWeek, twoWeeksAgo, threeWeeksAgo, manual] = await Promise.all([
+  const [lastWorked, lastWorkedHistory, currentWeek, lastWeek, twoWeeksAgo, threeWeeksAgo, manual, agents] = await Promise.all([
     readTab(lastWorkedTab),
     readTab(lastWorkedHistoryTab),
     readTab(currentWeekTab),
@@ -644,7 +651,9 @@ export async function getPerformanceTabs() {
     readTab(twoWeeksAgoTab),
     readTab(threeWeeksAgoTab),
     getManualNumbers(),
+    getAgents(),
   ]);
+  const officeByRepKey = new Map(agents.map((agent) => [agent.repKey, canonicalOffice(agent.office)]));
   const work = {
     lastWorked: rowsToObjects(lastWorked),
     lastWorkedHistory: rowsToObjects(lastWorkedHistory),
@@ -665,9 +674,9 @@ export async function getPerformanceTabs() {
     if (!key) continue;
     if (!latestByRep.has(key) || entry.date > latestByRep.get(key).date) latestByRep.set(key, entry);
   }
-  const manualLast = [...latestByRep.values()].map(manualRow);
-  const manualCurrent = sumManual(manual.filter((entry) => entry.date >= currentStart && entry.date <= currentEnd));
-  const manualPrevious = sumManual(manual.filter((entry) => entry.date >= lastStart && entry.date <= lastEnd));
+  const manualLast = [...latestByRep.values()].map((entry) => manualRow(entry, officeByRepKey));
+  const manualCurrent = sumManual(manual.filter((entry) => entry.date >= currentStart && entry.date <= currentEnd), officeByRepKey);
+  const manualPrevious = sumManual(manual.filter((entry) => entry.date >= lastStart && entry.date <= lastEnd), officeByRepKey);
 
   return {
     lastWorked: mergeLastWorkedWorkMyTFirst(work.lastWorked, manualLast),
@@ -778,6 +787,8 @@ function averageCountRows(rows = []) {
 
 export function buildNumbersTracking(agents, currentRows, historyRows, manualEntries, today = easternYmd()) {
   const byRepDate = new Map();
+  const officeByRepKey = new Map((agents || []).map((agent) => [agent.repKey, canonicalOffice(agent.office)]));
+  const officeNameKey = (office, name) => `${canonicalOffice(office)}|${normalizedTrackingName(name)}`;
 
   for (const row of [...historyRows, ...currentRows]) {
     const repName = trackingRepName(row);
@@ -786,8 +797,10 @@ export function buildNumbersTracking(agents, currentRows, historyRows, manualEnt
 
     if (!normalizedName || !date || !rowActivity(row)) continue;
 
-    byRepDate.set(`${normalizedName}|${date}`, {
+    const office = canonicalOffice(row.Office || row.office);
+    byRepDate.set(`${officeNameKey(office, repName)}|${date}`, {
       repName,
+      office,
       date,
       counts: rowCountsForTracking(row),
       source: "WorkMyT",
@@ -800,11 +813,13 @@ export function buildNumbersTracking(agents, currentRows, historyRows, manualEnt
     const date = normalizeTrackingDate(entry.date);
     if (!normalizedName || !date) continue;
 
-    const key = `${normalizedName}|${date}`;
+    const office = officeByRepKey.get(entry.repKey) || DEFAULT_OFFICE;
+    const key = `${officeNameKey(office, entry.repName)}|${date}`;
     if (byRepDate.has(key)) continue;
 
     byRepDate.set(key, {
       repName: entry.repName,
+      office,
       date,
       counts: {
         talks: entry.talks,
@@ -826,8 +841,9 @@ export function buildNumbersTracking(agents, currentRows, historyRows, manualEnt
 
   const reps = agents.map((agent) => {
     const agentName = normalizedTrackingName(agent.repName);
+    const agentOffice = canonicalOffice(agent.office);
     const ownRecords = records
-      .filter((record) => normalizedTrackingName(record.repName) === agentName)
+      .filter((record) => canonicalOffice(record.office) === agentOffice && normalizedTrackingName(record.repName) === agentName)
       .sort((left, right) => right.date.localeCompare(left.date));
     const latest = ownRecords[0] || null;
     const weekRecords = ownRecords.filter(
@@ -839,6 +855,7 @@ export function buildNumbersTracking(agents, currentRows, historyRows, manualEnt
     return {
       repKey: agent.repKey,
       repName: agent.repName,
+      office: agentOffice,
       team: agent.team || "Unassigned",
       teamLead: agent.teamLead || "",
       repType: agent.repType || "",

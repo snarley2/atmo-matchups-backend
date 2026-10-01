@@ -7,6 +7,7 @@ import puppeteer from "puppeteer";
 import dotenv from "dotenv";
 dotenv.config();
 import { google } from "googleapis";
+import { WORKMYT_CAMPAIGN_TARGETS, canonicalOffice, officeRecordKey } from "./offices.mjs";
 // ============================================================
 // CONFIG
 // ============================================================
@@ -14,9 +15,6 @@ const FIELD_DAY_URL =
   process.env.WORKMYT_FIELD_DAY_URL || "https://workmyt.com/fieldday";
 const email = process.env.WORKMYT_EMAIL;
 const password = process.env.WORKMYT_PASSWORD;
-const CAMPAIGN_NAME =
-  process.env.WORKMYT_CAMPAIGN || "MADHAV MEHTA";
-
 const LOOKBACK_DAYS = Number(
   process.env.PERFORMANCE_LOOKBACK_DAYS || 21
 );
@@ -933,12 +931,14 @@ function normalizeHistoryWorkDate(value) {
 
 function historyRowKey(row, headers) {
   const repNameIndex = headers.indexOf("Rep Name");
+  const officeIndex = headers.indexOf("Office");
   const workDateIndex = headers.indexOf("Last Worked Date");
   const repName = normalizeName(row[repNameIndex]);
+  const office = canonicalOffice(row[officeIndex]);
   const workDate = normalizeHistoryWorkDate(row[workDateIndex]);
 
   return repName && DATE_ARGUMENT_PATTERN.test(workDate)
-    ? `${repName}|${workDate}`
+    ? `${officeRecordKey(repName, office)}|${workDate}`
     : "";
 }
 
@@ -1246,21 +1246,25 @@ async function selectDailyView(page) {
   console.log("[filter] Daily view selected");
 }
 
-async function selectCampaign(page, campaignName) {
+async function selectCampaign(page, campaignName, occurrence = 0) {
   const previousSignature = await getTableSignature(page);
 
-  const result = await page.evaluate((wantedCampaign) => {
+  const result = await page.evaluate(({ wantedCampaign, wantedOccurrence }) => {
     const selects = [...document.querySelectorAll("select")];
 
     for (const select of selects) {
-      const option = [...select.options].find(
+      const options = [...select.options].filter(
         (candidate) =>
-          (candidate.textContent || "").trim() ===
-          wantedCampaign
+          (candidate.textContent || "").trim().toLowerCase() ===
+          wantedCampaign.trim().toLowerCase()
       );
+      const option = options[wantedOccurrence];
 
       if (!option) continue;
 
+      // selectedIndex matters when WorkMyT exposes duplicate labels (and even
+      // duplicate values), as it currently does for KEASEL BROOM.
+      select.selectedIndex = option.index;
       select.value = option.value;
 
       select.dispatchEvent(
@@ -1274,6 +1278,7 @@ async function selectCampaign(page, campaignName) {
       return {
         found: true,
         value: option.value,
+        matchCount: options.length,
       };
     }
 
@@ -1281,16 +1286,16 @@ async function selectCampaign(page, campaignName) {
       found: false,
       value: "",
     };
-  }, campaignName);
+  }, { wantedCampaign: campaignName, wantedOccurrence: occurrence });
 
   if (!result.found) {
     throw new Error(
-      `Campaign "${campaignName}" was not found.`
+      `Campaign "${campaignName}" occurrence ${occurrence + 1} was not found.`
     );
   }
 
   await waitForTableSettled(page, previousSignature);
-  console.log(`[filter] campaign="${campaignName}"`);
+  console.log(`[filter] campaign="${campaignName}" occurrence=${occurrence + 1}`);
 }
 
 async function selectDate(page, dateLabel) {
@@ -1488,7 +1493,7 @@ function getLastWorkedDayByRep(dailyRecords) {
   for (const record of dailyRecords) {
     if (!isLikelyWorkedDay(record)) continue;
 
-    const repKey = normalizeName(record.repName);
+    const repKey = officeRecordKey(record.repName, record.office);
     if (!repKey) continue;
 
     const existing = byRep.get(repKey);
@@ -1505,7 +1510,7 @@ function getLastWorkedDayByRep(dailyRecords) {
 
   return [...byRep.values()]
     .map((record) => ({
-      repKey: normalizeName(record.repName),
+      repKey: officeRecordKey(record.repName, record.office),
       repName: record.repName,
       office: record.office,
       lastWorkedDate: record.date,
@@ -1528,7 +1533,7 @@ function getLastWorkedDayByRep(dailyRecords) {
         gasPartials: record.gasPartials,
       },
     }))
-    .sort((a, b) => a.repName.localeCompare(b.repName));
+    .sort((a, b) => a.office.localeCompare(b.office) || a.repName.localeCompare(b.repName));
 }
 
 function sumPerformance(records) {
@@ -1711,84 +1716,51 @@ async function run() {
    await page.bringToFront();
    await page.mouse.click(500, 300);
 
-    await selectDailyView(page);
-    await selectDailyView(page);
-    await selectCampaign(page, CAMPAIGN_NAME);
-
     const dates = commandLine.dates;
     const dailyRecords = [];
     const skippedDates = [];
     const failedDates = [];
 
-    console.log(
-      `[run] collecting ${dates.length} calendar days`
-    );
+    console.log(`[run] collecting ${dates.length} calendar days across ${WORKMYT_CAMPAIGN_TARGETS.length} WorkMyT office selections`);
 
-    for (const [index, date] of dates.entries()) {
-      console.log(
-        `\n[date ${index + 1}/${dates.length}] ${date.label}`
-      );
+    for (const target of WORKMYT_CAMPAIGN_TARGETS) {
+      console.log(`\n[office] ${target.office} · WorkMyT match ${target.occurrence + 1}`);
+      await selectDailyView(page);
+      await selectCampaign(page, target.campaign, target.occurrence);
 
-      try {
-        const available = await selectDate(
-          page,
-          date.label
-        );
+      for (const [index, date] of dates.entries()) {
+        console.log(`\n[date ${index + 1}/${dates.length}] ${target.office} · ${date.label}`);
 
-        if (!available) {
-          console.log(
-            `   [skip] date is not available in dropdown`
-          );
+        try {
+          const available = await selectDate(page, date.label);
 
-          skippedDates.push({
+          if (!available) {
+            console.log("   [skip] date is not available in dropdown");
+            skippedDates.push({ office: target.office, date: date.iso, label: date.label, reason: "DATE_NOT_AVAILABLE" });
+            continue;
+          }
+
+          const rows = await extractVisiblePerformanceRows(page);
+          const normalizedRows = rows.map((row) => ({
+            ...row,
+            office: target.office,
             date: date.iso,
-            label: date.label,
-            reason: "DATE_NOT_AVAILABLE",
-          });
+            dateLabel: date.label,
+            repKey: officeRecordKey(row.repName, target.office),
+            likelyWorked: isLikelyWorkedDay(row),
+          }));
 
-          continue;
+          dailyRecords.push(...normalizedRows);
+          console.log(`   [rows] collected=${normalizedRows.length}`);
+        } catch (error) {
+          console.error(`   [error] ${error?.message || error}`);
+          failedDates.push({ office: target.office, date: date.iso, label: date.label, error: error?.message || String(error) });
+
+          await page.goto(FIELD_DAY_URL, { waitUntil: "domcontentloaded" }).catch(() => {});
+          await waitForFieldDay(page).catch(() => {});
+          await selectDailyView(page).catch(() => {});
+          await selectCampaign(page, target.campaign, target.occurrence).catch(() => {});
         }
-
-        const rows =
-          await extractVisiblePerformanceRows(page);
-
-        const normalizedRows = rows.map((row) => ({
-          ...row,
-          date: date.iso,
-          dateLabel: date.label,
-          repKey: normalizeName(row.repName),
-          likelyWorked: isLikelyWorkedDay(row),
-        }));
-
-        dailyRecords.push(...normalizedRows);
-
-        console.log(
-          `   [rows] collected=${normalizedRows.length}`
-        );
-      } catch (error) {
-        console.error(
-          `   [error] ${error?.message || error}`
-        );
-
-        failedDates.push({
-          date: date.iso,
-          label: date.label,
-          error: error?.message || String(error),
-        });
-
-        // Re-center on FieldDay before the next date.
-        await page
-          .goto(FIELD_DAY_URL, {
-            waitUntil: "domcontentloaded",
-          })
-          .catch(() => {});
-
-        await waitForFieldDay(page).catch(() => {});
-        await selectDailyView(page).catch(() => {});
-        await selectCampaign(
-          page,
-          CAMPAIGN_NAME
-        ).catch(() => {});
       }
     }
 
@@ -1798,7 +1770,7 @@ async function run() {
       generatedAt: new Date().toISOString(),
       source: {
         url: FIELD_DAY_URL,
-        campaign: CAMPAIGN_NAME,
+        campaigns: WORKMYT_CAMPAIGN_TARGETS,
         mode: "Daily",
         selection: commandLine.selection,
       },

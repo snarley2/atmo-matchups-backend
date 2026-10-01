@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { officeRecordKey } from "../offices.mjs";
 
 const TRAINER_TYPES = new Set(["trainer", "manager"]);
 const BLOCKED_REP_TYPES = new Set(["trainer", "manager", "absent"]);
@@ -128,27 +129,35 @@ function periodDetails(row = {}) {
 }
 
 export function combineAgentsAndGaps(agents, gaps, performance = {}) {
+  const rowOffice = (row) => clean(pick(row, ["Office", "office", "Campaign", "campaign"]));
+  const rowKey = (row) => {
+    const name = rowName(row);
+    const office = rowOffice(row);
+    return office ? officeRecordKey(name, office) : name;
+  };
+  const agentKey = (agent) => officeRecordKey(agent.repName, agent.office);
+  const lookup = (map, agent) => map?.get(agentKey(agent)) || map?.get(lower(agent.repName));
   const gapMap = new Map();
   for (const gap of gaps) {
     const name = rowName(gap);
-    if (name) gapMap.set(name, gap);
+    if (name) gapMap.set(rowKey(gap), gap);
   }
   const historyRows = Array.isArray(performance.lastWorkedHistory) ? performance.lastWorkedHistory : [];
-  const maps = Object.fromEntries(Object.entries(performance).filter(([period]) => period !== "lastWorkedHistory").map(([period, rows]) => [period, new Map((rows || []).map((row) => [rowName(row), row]))]));
+  const maps = Object.fromEntries(Object.entries(performance).filter(([period]) => period !== "lastWorkedHistory").map(([period, rows]) => [period, new Map((rows || []).map((row) => [rowKey(row), row]))]));
   return agents.map((agent) => {
     const name = lower(agent.repName);
     return {
       ...agent,
-      stats: gapMap.get(name) || {},
+      stats: gapMap.get(agentKey(agent)) || gapMap.get(name) || {},
       performance: {
-        lastWorked: periodDetails(maps.lastWorked?.get(name)),
-        currentWeek: periodDetails(maps.currentWeek?.get(name)),
-        lastWeek: periodDetails(maps.lastWeek?.get(name)),
-        twoWeeksAgo: periodDetails(maps.twoWeeksAgo?.get(name)),
-        threeWeeksAgo: periodDetails(maps.threeWeeksAgo?.get(name)),
+        lastWorked: periodDetails(lookup(maps.lastWorked, agent)),
+        currentWeek: periodDetails(lookup(maps.currentWeek, agent)),
+        lastWeek: periodDetails(lookup(maps.lastWeek, agent)),
+        twoWeeksAgo: periodDetails(lookup(maps.twoWeeksAgo, agent)),
+        threeWeeksAgo: periodDetails(lookup(maps.threeWeeksAgo, agent)),
       },
       performanceHistory: historyRows
-        .filter((row) => rowName(row) === name)
+        .filter((row) => rowKey(row) === agentKey(agent) || (!rowOffice(row) && rowName(row) === name))
         .map((row) => ({ snapshotDate: normalizeRecordedDate(pick(row, ["Snapshot Date"])), ...periodDetails(row) }))
         .filter((item) => item.recordedDate)
         .sort((a, b) => String(b.recordedDate).localeCompare(String(a.recordedDate))),

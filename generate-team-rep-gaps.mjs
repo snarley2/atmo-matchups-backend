@@ -3,6 +3,7 @@ import path from "path";
 import process from "process";
 import dotenv from "dotenv";
 import { google } from "googleapis";
+import { canonicalOffice, officeRecordKey } from "./offices.mjs";
 
  dotenv.config();
 
@@ -395,9 +396,10 @@ function parseLastWorked(tab) {
     const rates = Object.fromEntries(
       GAP_CONFIG.map((gap) => [gap.key, toNumber(valueAt(row, indexes[gap.key]))])
     );
-    map.set(normalizeName(repName), {
+    const office = canonicalOffice(valueAt(row, indexes.office));
+    map.set(officeRecordKey(repName, office), {
       repName,
-      office: normalizeText(valueAt(row, indexes.office)),
+      office,
       lastWorkedDate: valueAt(row, indexes.lastWorkedDate),
       daysInactive: toNumber(valueAt(row, indexes.daysInactive)),
       flag: normalizeText(valueAt(row, indexes.flag)) || "unknown",
@@ -449,9 +451,10 @@ function parseWeekly(tab) {
       infoToClose: safeDivide(close, info),
     };
 
-    map.set(normalizeName(repName), {
+    const office = canonicalOffice(valueAt(row, indexes.office));
+    map.set(officeRecordKey(repName, office), {
       repName,
-      office: normalizeText(valueAt(row, indexes.office)),
+      office,
       metrics: { talk, stops, zips, presentation, info, close },
       rates,
       onTargetStages: onTargetStagesFromRates(rates),
@@ -463,12 +466,12 @@ function parseWeekly(tab) {
 
 function buildReport(agents, lastWorkedMap, currentMap, lastMap) {
   const names = new Set([
-    ...agents.map((a) => normalizeName(a.repName)),
+    ...agents.map((a) => officeRecordKey(a.repName, a.office)),
     ...lastWorkedMap.keys(),
     ...currentMap.keys(),
     ...lastMap.keys(),
   ]);
-  const agentMap = new Map(agents.map((a) => [normalizeName(a.repName), a]));
+  const agentMap = new Map(agents.map((a) => [officeRecordKey(a.repName, a.office), a]));
 
   const reps = [...names].map((key) => {
     const agent = agentMap.get(key) || {};
@@ -494,6 +497,7 @@ function buildReport(agents, lastWorkedMap, currentMap, lastMap) {
   });
 
   reps.sort((a, b) =>
+    a.office.localeCompare(b.office) ||
     a.team.localeCompare(b.team) ||
     a.teamLead.localeCompare(b.teamLead) ||
     a.repName.localeCompare(b.repName)
@@ -525,13 +529,15 @@ function buildRows(reps) {
     "Last Worked Date",
     "Days Inactive",
     "Activity Flag",
+    "Office",
   ]];
 
   let priorTeam = null;
 
   for (const rep of reps) {
-    if (priorTeam !== null && priorTeam !== rep.team) {
-      rows.push(new Array(17).fill(""));
+    const groupKey = `${rep.office}|${rep.team}`;
+    if (priorTeam !== null && priorTeam !== groupKey) {
+      rows.push(new Array(18).fill(""));
     }
 
     rows.push([
@@ -549,9 +555,10 @@ function buildRows(reps) {
       rep.lastWorkedDate,
       rep.daysInactive,
       rep.flag,
+      rep.office,
     ]);
 
-    priorTeam = rep.team;
+    priorTeam = groupKey;
   }
 
   return rows;
@@ -621,7 +628,7 @@ function borderStyle(color = "#B7B7B7") {
 }
 
 async function formatSheet(sheets, sheetId, reps, rows) {
-  const columnCount = 17;
+  const columnCount = 18;
   const teamFormats = buildTeamFormats(reps);
 
   const requests = [
@@ -744,7 +751,7 @@ async function formatSheet(sheets, sheetId, reps, rows) {
       [3, 180], [4, 110], [5, 330],
       [6, 180], [7, 110], [8, 330],
       [9, 180], [10, 110], [11, 330],
-      [12, 190], [13, 115], [14, 125], [15, 105], [16, 115],
+      [12, 190], [13, 115], [14, 125], [15, 105], [16, 115], [17, 170],
     ].map(([columnIndex, pixelSize]) => ({
       updateDimensionProperties: {
         range: {
@@ -763,7 +770,8 @@ async function formatSheet(sheets, sheetId, reps, rows) {
   let previousTeam = null;
 
   for (const rep of reps) {
-    if (previousTeam !== null && previousTeam !== rep.team) {
+    const groupKey = `${rep.office}|${rep.team}`;
+    if (previousTeam !== null && previousTeam !== groupKey) {
       requests.push({
         updateDimensionProperties: {
           range: {
@@ -972,7 +980,7 @@ async function formatSheet(sheets, sheetId, reps, rows) {
     });
 
     rowIndex += 1;
-    previousTeam = rep.team;
+    previousTeam = groupKey;
   }
 
   await sheets.spreadsheets.batchUpdate({

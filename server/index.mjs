@@ -9,6 +9,7 @@ import { getAgents, replaceAgents, getGaps, getPerformanceTabs, saveMatchups, ge
 import { combineAgentsAndGaps, generateGroups, generateStoreGroups, generateWorkGroups, STORE_CATALOG } from "./logic.mjs";
 import { attachProductionLogs } from "./production-csv.mjs";
 import { runDailyAutomation, isDailyAutomationRunning } from "../run.mjs";
+import { DEFAULT_OFFICE, OFFICES, canonicalOffice } from "../offices.mjs";
 
 const app = express();
 
@@ -145,6 +146,7 @@ io.on("connection", (socket) => {
     const groups = Array.isArray(payload.groups) ? payload.groups : [];
     socket.broadcast.emit("matchups:state", {
       groups,
+      office: canonicalOffice(payload.office || DEFAULT_OFFICE),
       actor: sanitizeLiveName(payload.actor || socket.data.actor),
       action: String(payload.action || "updated the matchups").slice(0, 180),
       at: payload.at || new Date().toISOString(),
@@ -260,38 +262,57 @@ app.get("/api/health", (_req, res) => {
   });
 });
 
-let lastGoodBootstrap = null;
+app.get("/api/offices", (_req, res) => {
+  res.json({ defaultOffice: DEFAULT_OFFICE, offices: OFFICES });
+});
+
+const lastGoodBootstrap = new Map();
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function buildBootstrap() {
-  const [agents, gaps, performance, draft] = await Promise.all([
+function agentsForOffice(agents, office) {
+  const selected = canonicalOffice(office);
+  return (agents || []).filter((agent) => canonicalOffice(agent.office) === selected);
+}
+
+function requestedOffice(req) {
+  return canonicalOffice(req.query?.office || req.body?.office || DEFAULT_OFFICE);
+}
+
+async function buildBootstrap(office = DEFAULT_OFFICE) {
+  const selectedOffice = canonicalOffice(office);
+  const [allAgents, gaps, performance, draft] = await Promise.all([
     getAgents(),
     getGaps(),
     getPerformanceTabs(),
-    getDraftMatchups(),
+    getDraftMatchups(selectedOffice),
   ]);
 
   // An empty Agents read is not a usable bootstrap for this app. Treat it as
   // a failed read so we retry instead of telling every browser to wipe itself.
-  if (!Array.isArray(agents) || agents.length === 0) {
+  if (!Array.isArray(allAgents) || allAgents.length === 0) {
     throw new Error('Agents sheet returned 0 agents');
   }
+
+  const agents = agentsForOffice(allAgents, selectedOffice);
 
   return {
     agents: combineAgentsAndGaps(attachProductionLogs(agents), gaps, performance),
     draft,
+    selectedOffice,
+    offices: OFFICES,
   };
 }
 
-app.get("/api/bootstrap", async (_req, res, next) => {
+app.get("/api/bootstrap", async (req, res, next) => {
+  const office = requestedOffice(req);
   let lastError;
 
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
-      const payload = await buildBootstrap();
-      lastGoodBootstrap = payload;
-      console.log(`[bootstrap] success attempt=${attempt} agents=${payload.agents.length} groups=${payload.draft?.groups?.length || 0}`);
+      const payload = await buildBootstrap(office);
+      lastGoodBootstrap.set(office, payload);
+      console.log(`[bootstrap] success office="${office}" attempt=${attempt} agents=${payload.agents.length} groups=${payload.draft?.groups?.length || 0}`);
       return res.json(payload);
     } catch (error) {
       lastError = error;
@@ -302,10 +323,11 @@ app.get("/api/bootstrap", async (_req, res, next) => {
 
   // If Sheets has a short-lived failure after this Render instance already had
   // a successful read, keep serving the last known-good state rather than [].
-  if (lastGoodBootstrap?.agents?.length) {
-    console.warn(`[bootstrap] serving last-good snapshot agents=${lastGoodBootstrap.agents.length}`);
+  const fallback = lastGoodBootstrap.get(office);
+  if (fallback) {
+    console.warn(`[bootstrap] serving last-good snapshot office="${office}" agents=${fallback.agents.length}`);
     return res.json({
-      ...lastGoodBootstrap,
+      ...fallback,
       meta: { degraded: true, reason: lastError?.message || "Temporary data read failure" },
     });
   }
@@ -341,8 +363,8 @@ app.get("/api/auth/admin/me", requireAdmin, async (req, res) => {
   res.json({ user: { repKey: req.admin.repKey, repName: req.admin.repName, repType: req.admin.role } });
 });
 
-app.get("/api/agents", async (_req, res, next) => {
-  try { res.json(await getAgents()); } catch (error) { next(error); }
+app.get("/api/agents", async (req, res, next) => {
+  try { res.json(agentsForOffice(await getAgents(), requestedOffice(req))); } catch (error) { next(error); }
 });
 
 app.post("/api/agents", requireAdmin, async (req, res, next) => {
@@ -351,7 +373,7 @@ app.post("/api/agents", requireAdmin, async (req, res, next) => {
     const agent = {
       repKey: crypto.randomUUID(),
       repName: String(req.body.repName || "").trim(),
-      office: String(req.body.office || "MADHAV MEHTA").trim(),
+      office: requestedOffice(req),
       repType: String(req.body.repType || "New Rep").trim(),
       team: String(req.body.team || "").trim(),
       teamLead: String(req.body.teamLead || "").trim(),
@@ -394,7 +416,8 @@ app.delete("/api/agents/:repKey", requireAdmin, async (req, res, next) => {
 app.post("/api/matchups/auto", requireAdmin, async (req, res, next) => {
   try {
     const [agents, gaps, performance] = await Promise.all([getAgents(), getGaps(), getPerformanceTabs()]);
-    const combined = combineAgentsAndGaps(agents, gaps, performance);
+    const office = requestedOffice(req);
+    const combined = combineAgentsAndGaps(agentsForOffice(agents, office), gaps, performance);
     res.json({ groups: generateGroups(combined, {
       groupSize: Number(req.body.groupSize || 4),
       groupingMode: req.body.groupingMode === "team" ? "team" : "gaps",
@@ -403,17 +426,19 @@ app.post("/api/matchups/auto", requireAdmin, async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
-app.get("/api/matchups/draft", async (_req, res, next) => {
-  try { res.json(await getDraftMatchups()); } catch (error) { next(error); }
+app.get("/api/matchups/draft", async (req, res, next) => {
+  try { res.json(await getDraftMatchups(requestedOffice(req))); } catch (error) { next(error); }
 });
 
 app.put("/api/matchups/draft", requireAdmin, async (req, res, next) => {
   try {
     const date = String(req.body.date || new Date().toISOString().slice(0, 10));
     const groups = Array.isArray(req.body.groups) ? req.body.groups : [];
-    const saved = await saveDraftMatchups({ date, groups });
+    const office = requestedOffice(req);
+    const saved = await saveDraftMatchups({ date, groups, office });
     io.emit("matchups:state", {
       groups,
+      office,
       actor: sanitizeLiveName(req.body.actor || "Server"),
       action: String(req.body.action || "saved the shared draft"),
       at: new Date().toISOString(),
@@ -422,22 +447,22 @@ app.put("/api/matchups/draft", requireAdmin, async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
-app.get("/api/matchups/final", requireAdmin, async (_req, res, next) => {
-  try { res.json(await getFinalMatchups()); } catch (error) { next(error); }
+app.get("/api/matchups/final", requireAdmin, async (req, res, next) => {
+  try { res.json(await getFinalMatchups(requestedOffice(req))); } catch (error) { next(error); }
 });
 
 app.post("/api/matchups", requireAdmin, async (req, res, next) => {
   try {
     const date = String(req.body.date || new Date().toISOString().slice(0, 10));
     const groups = Array.isArray(req.body.groups) ? req.body.groups : [];
-    res.json(await saveMatchups({ date, groups }));
+    res.json(await saveMatchups({ date, groups, office: requestedOffice(req) }));
   } catch (error) { next(error); }
 });
 
 app.post("/api/store-matchups/generate", requireAdmin, async (_req, res, next) => {
   try {
     const [agents, gaps, performance] = await Promise.all([getAgents(), getGaps(), getPerformanceTabs()]);
-    const combined = combineAgentsAndGaps(attachProductionLogs(agents), gaps, performance);
+    const combined = combineAgentsAndGaps(attachProductionLogs(agentsForOffice(agents, DEFAULT_OFFICE)), gaps, performance);
     res.json({ groups: generateStoreGroups(combined) });
   } catch (error) { next(error); }
 });
@@ -445,7 +470,7 @@ app.post("/api/store-matchups/generate", requireAdmin, async (_req, res, next) =
 app.post("/api/work-matchups/generate", requireAdmin, async (_req, res, next) => {
   try {
     const [agents, gaps, performance] = await Promise.all([getAgents(), getGaps(), getPerformanceTabs()]);
-    const combined = combineAgentsAndGaps(attachProductionLogs(agents), gaps, performance);
+    const combined = combineAgentsAndGaps(attachProductionLogs(agentsForOffice(agents, DEFAULT_OFFICE)), gaps, performance);
     res.json({ groups: generateWorkGroups(combined) });
   } catch (error) { next(error); }
 });
@@ -535,17 +560,23 @@ app.post("/api/suggestions", async (req, res, next) => {
   }
 });
 
-app.get("/api/numbers-tracking", requireAdmin, async (_req, res, next) => {
+app.get("/api/numbers-tracking", requireAdmin, async (req, res, next) => {
   try {
-    res.json(await getNumbersTracking());
+    const office = requestedOffice(req);
+    const [tracking, agents] = await Promise.all([getNumbersTracking(), getAgents()]);
+    const keys = new Set(agentsForOffice(agents, office).map((agent) => agent.repKey));
+    res.json({ ...tracking, office, reps: (tracking.reps || []).filter((rep) => keys.has(rep.repKey)) });
   } catch (error) {
     next(error);
   }
 });
 
-app.get("/api/manual-numbers", requireAdmin, async (_req, res, next) => {
+app.get("/api/manual-numbers", requireAdmin, async (req, res, next) => {
   try {
-    res.json(await getManualNumbers());
+    const office = requestedOffice(req);
+    const [entries, agents] = await Promise.all([getManualNumbers(), getAgents()]);
+    const keys = new Set(agentsForOffice(agents, office).map((agent) => agent.repKey));
+    res.json(entries.filter((entry) => keys.has(entry.repKey)));
   } catch (error) {
     next(error);
   }
@@ -556,7 +587,8 @@ app.post("/api/manual-numbers", async (req, res, next) => {
     const repName = String(req.body.repName || "").trim().slice(0, 120);
     if (!repName) return res.status(400).json({ error: "Rep name is required" });
     const { date, day } = easternDateParts(String(req.body.date || "").trim());
-    const agents = await getAgents();
+    const office = requestedOffice(req);
+    const agents = agentsForOffice(await getAgents(), office);
     const requestedKey = String(req.body.repKey || "").trim();
     const matched =
       agents.find((agent) => requestedKey && agent.repKey === requestedKey) ||
@@ -589,16 +621,19 @@ app.post("/api/manual-numbers", async (req, res, next) => {
       createdAt: now,
       updatedAt: now,
     });
-    io.emit("manual-numbers:saved", saved);
+    io.emit("manual-numbers:saved", { ...saved, office });
     res.status(201).json(saved);
   } catch (error) {
     next(error);
   }
 });
 
-app.get("/api/field-notes", requireAdmin, async (_req, res, next) => {
+app.get("/api/field-notes", requireAdmin, async (req, res, next) => {
   try {
-    res.json(await getFieldNotes());
+    const office = requestedOffice(req);
+    const [notes, agents] = await Promise.all([getFieldNotes(), getAgents()]);
+    const keys = new Set(agentsForOffice(agents, office).map((agent) => agent.repKey));
+    res.json(notes.filter((note) => keys.has(note.repKey)));
   } catch (error) {
     next(error);
   }
@@ -613,7 +648,8 @@ app.post("/api/field-notes", requireAdmin, async (req, res, next) => {
     if (!noteText) return res.status(400).json({ error: "Note is required" });
 
     const { date, day } = easternDateParts(String(req.body.date || "").trim());
-    const agents = await getAgents();
+    const office = requestedOffice(req);
+    const agents = agentsForOffice(await getAgents(), office);
     const requestedKey = String(req.body.repKey || "").trim();
     const matched =
       agents.find((agent) => requestedKey && agent.repKey === requestedKey) ||
@@ -631,7 +667,7 @@ app.post("/api/field-notes", requireAdmin, async (req, res, next) => {
       createdAt: new Date().toISOString(),
     });
 
-    io.emit("field-notes:new", saved);
+    io.emit("field-notes:new", { ...saved, office });
     res.status(201).json(saved);
   } catch (error) {
     next(error);

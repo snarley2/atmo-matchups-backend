@@ -6,6 +6,7 @@ import puppeteer from "puppeteer";
 import dotenv from "dotenv";
 dotenv.config();
 import { google } from "googleapis";
+import { WORKMYT_CAMPAIGN_TARGETS, officeRecordKey } from "./offices.mjs";
 // ============================================================
 // CONFIG
 // ============================================================
@@ -13,9 +14,6 @@ const FIELD_DAY_URL =
   process.env.WORKMYT_FIELD_DAY_URL || "https://workmyt.com/fieldday";
 const email = process.env.WORKMYT_EMAIL;
 const password = process.env.WORKMYT_PASSWORD;
-const CAMPAIGN_NAME =
-  process.env.WORKMYT_CAMPAIGN || "MADHAV MEHTA";
-
 const LOOKBACK_DAYS = Number(
   process.env.PERFORMANCE_LOOKBACK_DAYS || 21
 );
@@ -1326,15 +1324,15 @@ async function selectWeeklyOption(page, optionValue) {
   }
 }
 
-function buildWeeklyOutput(rows, weekLabel) {
+function buildWeeklyOutput(rows, weekLabel, office) {
   return {
     generatedAt: new Date().toISOString(),
     weekLabel,
     reps: rows
       .map((row) => ({
-        repKey: normalizeName(row.repName),
+        repKey: officeRecordKey(row.repName, office),
         repName: row.repName,
-        office: row.office,
+        office,
         performance: {
           workedHours: row.workedHours,
           talk: row.talk,
@@ -1353,24 +1351,6 @@ function buildWeeklyOutput(rows, weekLabel) {
 }
 
 async function collectAndWriteWeeklyPeriods(page) {
-  await selectWeekView(page);
-  await selectCampaign(page, CAMPAIGN_NAME);
-
-  const weeklyDates = await getWeeklyDateOptions(page);
-  const options = weeklyDates.options;
-
-  console.log(
-    `[weekly] available weeks: ${options
-      .map((o) => o.label)
-      .join(" | ")}`
-  );
-
-  if (options.length < 4) {
-    throw new Error(
-      `Expected at least four weekly date options, found ${options.length}.`
-    );
-  }
-
   // WorkMyT orders weeks newest/current first.
   //
   // 0 = Current Week
@@ -1384,67 +1364,79 @@ async function collectAndWriteWeeklyPeriods(page) {
     {
       key: "currentWeek",
       label: "current week",
-      option: options[0],
+      optionIndex: 0,
       sheetTab: CURRENT_WEEK_SHEET_TAB,
     },
     {
       key: "lastWeek",
       label: "last week",
-      option: options[1],
+      optionIndex: 1,
       sheetTab: LAST_WEEK_SHEET_TAB,
     },
     {
       key: "twoWeeksAgo",
       label: "2 weeks ago",
-      option: options[2],
+      optionIndex: 2,
       sheetTab: TWO_WEEKS_AGO_SHEET_TAB,
     },
     {
       key: "threeWeeksAgo",
       label: "3 weeks ago",
-      option: options[3],
+      optionIndex: 3,
       sheetTab: THREE_WEEKS_AGO_SHEET_TAB,
     },
   ];
 
-  const outputs = {};
+  const combined = Object.fromEntries(periods.map((period) => [period.key, {
+    generatedAt: new Date().toISOString(),
+    weekLabel: "",
+    repsByKey: new Map(),
+  }]));
 
-  for (const period of periods) {
-    if (!period.option) {
-      throw new Error(
-        `Could not identify ${period.label} option.`
-      );
+  const productionScore = (rep) => Object.values(rep.performance || {})
+    .reduce((sum, value) => sum + (Number(value) || 0), 0);
+
+  for (const target of WORKMYT_CAMPAIGN_TARGETS) {
+    console.log(`\n[weekly office] ${target.office} · WorkMyT match ${target.occurrence + 1}`);
+    await selectWeekView(page);
+    await selectCampaign(page, target.campaign, target.occurrence);
+
+    const options = (await getWeeklyDateOptions(page)).options;
+    console.log(`[weekly] available weeks: ${options.map((option) => option.label).join(" | ")}`);
+    if (options.length < 4) throw new Error(`Expected at least four weekly date options, found ${options.length}.`);
+
+    for (const period of periods) {
+      const option = options[period.optionIndex];
+      if (!option) throw new Error(`Could not identify ${period.label} option for ${target.office}.`);
+
+      console.log(`[weekly] ${target.office} selecting ${period.label}: ${option.label}`);
+      await selectWeeklyOption(page, option.value);
+      await waitForVisiblePerformanceRows(page, 1);
+
+      const weeklyOutput = buildWeeklyOutput(await extractVisiblePerformanceRows(page), option.label, target.office);
+      const bucket = combined[period.key];
+      bucket.weekLabel ||= weeklyOutput.weekLabel;
+
+      for (const rep of weeklyOutput.reps) {
+        const key = officeRecordKey(rep.repName, rep.office);
+        const existing = bucket.repsByKey.get(key);
+        if (!existing || productionScore(rep) > productionScore(existing)) bucket.repsByKey.set(key, rep);
+      }
+
+      console.log(`[weekly] ${target.office} ${period.label} rows=${weeklyOutput.reps.length}`);
     }
+  }
 
-    console.log(
-      `[weekly] selecting ${period.label}: ${period.option.label}`
-    );
-
-    await selectWeeklyOption(
-      page,
-      period.option.value
-    );
-
-    await waitForVisiblePerformanceRows(page, 1);
-
-    const rows =
-      await extractVisiblePerformanceRows(page);
-
-    const weeklyOutput =
-      buildWeeklyOutput(
-        rows,
-        period.option.label
-      );
-
-    console.log(
-      `[weekly] ${period.label} rows=${weeklyOutput.reps.length}; writing only to ${period.sheetTab}`
-    );
-
-    await writeWeeklyOutputToGoogleSheet(
-      weeklyOutput,
-      period.sheetTab
-    );
-
+  const outputs = {};
+  for (const period of periods) {
+    const bucket = combined[period.key];
+    const weeklyOutput = {
+      generatedAt: bucket.generatedAt,
+      weekLabel: bucket.weekLabel,
+      reps: [...bucket.repsByKey.values()].sort((a, b) => a.office.localeCompare(b.office) || a.repName.localeCompare(b.repName)),
+    };
+    await writeWeeklyOutputToGoogleSheet(weeklyOutput, period.sheetTab);
+    console.log(`[weekly] wrote ${weeklyOutput.reps.length} combined rows to ${period.sheetTab}`);
     outputs[period.key] = weeklyOutput;
   }
 
@@ -1478,21 +1470,25 @@ async function selectDailyView(page) {
   console.log("[filter] Daily view selected");
 }
 
-async function selectCampaign(page, campaignName) {
+async function selectCampaign(page, campaignName, occurrence = 0) {
   const previousSignature = await getTableSignature(page);
 
-  const result = await page.evaluate((wantedCampaign) => {
+  const result = await page.evaluate(({ wantedCampaign, wantedOccurrence }) => {
     const selects = [...document.querySelectorAll("select")];
 
     for (const select of selects) {
-      const option = [...select.options].find(
+      const options = [...select.options].filter(
         (candidate) =>
-          (candidate.textContent || "").trim() ===
-          wantedCampaign
+          (candidate.textContent || "").trim().toLowerCase() ===
+          wantedCampaign.trim().toLowerCase()
       );
+      const option = options[wantedOccurrence];
 
       if (!option) continue;
 
+      // selectedIndex guarantees the second KEASEL BROOM row is selected even
+      // if WorkMyT gives both duplicate labels the same option value.
+      select.selectedIndex = option.index;
       select.value = option.value;
 
       select.dispatchEvent(
@@ -1506,6 +1502,7 @@ async function selectCampaign(page, campaignName) {
       return {
         found: true,
         value: option.value,
+        matchCount: options.length,
       };
     }
 
@@ -1513,16 +1510,16 @@ async function selectCampaign(page, campaignName) {
       found: false,
       value: "",
     };
-  }, campaignName);
+  }, { wantedCampaign: campaignName, wantedOccurrence: occurrence });
 
   if (!result.found) {
     throw new Error(
-      `Campaign "${campaignName}" was not found.`
+      `Campaign "${campaignName}" occurrence ${occurrence + 1} was not found.`
     );
   }
 
   await waitForTableSettled(page, previousSignature);
-  console.log(`[filter] campaign="${campaignName}"`);
+  console.log(`[filter] campaign="${campaignName}" occurrence=${occurrence + 1}`);
 }
 
 async function selectDate(page, dateLabel) {
