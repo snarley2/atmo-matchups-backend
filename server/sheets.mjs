@@ -159,6 +159,7 @@ function matchupRows({ date, groups, updatedAt = new Date().toISOString() }) {
       member.repName || "",
       member.team || group.team || "",
       updatedAt,
+      JSON.stringify(group.teamIds || []),
     ]);
   });
 }
@@ -249,7 +250,7 @@ export async function getDraftMatchups(office = DEFAULT_OFFICE) {
 const STORE_MATCHUP_HEADERS = [
   "Date", "Priority", "Store ID", "Store Locator", "Store #", "Tier",
   "Where to Staff", "Store Manager", "Type", "Store Production",
-  "Rep Key", "Rep Name", "Team", "Trainer", "Rep Production", "Updated At",
+  "Rep Key", "Rep Name", "Team", "Trainer", "Rep Production", "Updated At", "Team IDs",
 ];
 
 function storeMatchupRows({ date, groups, updatedAt = new Date().toISOString() }) {
@@ -267,7 +268,7 @@ function storeMatchupRows({ date, groups, updatedAt = new Date().toISOString() }
       group.kind || "Production",
       Number(group.production) || 0,
     ];
-    if (!members.length) return [[...base, "", "", "", "", 0, updatedAt]];
+    if (!members.length) return [[...base, "", "", "", "", 0, updatedAt, JSON.stringify(group.teamIds || [])]];
     return members.map((member) => [
       ...base,
       member.repKey || "",
@@ -305,6 +306,7 @@ function rowsToStoreMatchups(tab = {}) {
         kind: String(row[modern ? 8 : 4] || "Production"),
         production: Number(row[modern ? 9 : 5]) || 0,
         members: [],
+        teamIds: (() => { try { const value = JSON.parse(String(row[16] || "[]")); return Array.isArray(value) ? value.map(String) : []; } catch { return []; } })(),
       };
       byId.set(id, group);
       groups.push(group);

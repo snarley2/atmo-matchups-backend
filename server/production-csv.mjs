@@ -34,6 +34,7 @@ function weeklyElectric(value) {
 function nameKeys(value) {
   const clean = String(value || "")
     .replace(/[↓↑]/g, "")
+    .replace(/\s*\((?:PL|L|Owner|Trainer|Manager|Rep)\)\s*$/i, "")
     .replace(/^--|--$/g, "")
     .trim();
   if (!clean || /team\s*$/i.test(clean) || /(?:daily|weekly|office)?\s*totals?$/i.test(clean)) return [];
@@ -47,7 +48,7 @@ function nameKeys(value) {
 }
 
 function nameAliases(value) {
-  let clean = String(value || "").replace(/[↓↑]/g, "").trim();
+  let clean = String(value || "").replace(/[↓↑]/g, "").replace(/\s*\((?:PL|L|Owner|Trainer|Manager|Rep)\)\s*$/i, "").trim();
   if (clean.includes(",")) {
     const [last, ...rest] = clean.split(",");
     clean = `${rest.join(" ")} ${last}`.trim();
@@ -132,7 +133,7 @@ export function attachProductionLogs(agents = []) {
     if (!aliasBuckets.has(alias)) aliasBuckets.set(alias, []);
     aliasBuckets.get(alias).push(record);
   }
-  const uniqueAliases = new Map([...aliasBuckets].filter(([,matches]) => matches.length === 1).map(([alias,matches]) => [alias,matches[0]]));
+  const uniqueAliases = new Map([...aliasBuckets].filter(([,matches]) => new Set(matches.flatMap(record => record.keys)).size === 1).map(([alias,matches]) => [alias,matches[0]]));
   return agents.map((agent) => {
     const record = nameKeys(agent.repName).map((key) => byName.get(key)).find(Boolean) || nameAliases(agent.repName).map((key) => uniqueAliases.get(key)).find(Boolean);
     return { ...agent, productionLog: record ? {
@@ -147,4 +148,16 @@ export function attachProductionLogs(agents = []) {
       sourceFile: record.sourceFile,
     } : { current: 0, electric: 0, gas: 0, production: 0, lastWeek: null, twoWeeksAgo: null, overall: 0, partials: 0, sourceFile: "" } };
   });
+}
+
+// A searchable inventory of every distinct rep across all TSV production logs.
+export function getProductionRepDirectory() {
+  const byKey = new Map();
+  for (const record of getProductionLogRecords()) {
+    const key = record.keys.find(Boolean);
+    if (!key) continue;
+    const previous = byKey.get(key);
+    if (!previous || record.production > previous.production) byKey.set(key, record);
+  }
+  return [...byKey.values()].map(record => ({ repName: record.repName, productionLog: record, sourceFile: record.sourceFile })).sort((a,b) => a.repName.localeCompare(b.repName));
 }

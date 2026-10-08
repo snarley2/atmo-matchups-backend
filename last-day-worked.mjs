@@ -16,7 +16,7 @@ const FIELD_DAY_URL =
 const email = process.env.WORKMYT_EMAIL;
 const password = process.env.WORKMYT_PASSWORD;
 const LOOKBACK_DAYS = Number(
-  process.env.PERFORMANCE_LOOKBACK_DAYS || 21
+  process.env.PERFORMANCE_LOOKBACK_DAYS || 14
 );
 
 const DATE_ARGUMENT_PATTERN = /^\d{4}-\d{2}-\d{2}$/;

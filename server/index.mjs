@@ -475,6 +475,26 @@ app.post("/api/work-matchups/generate", requireAdmin, async (_req, res, next) =>
   } catch (error) { next(error); }
 });
 
+app.get("/api/training-watch", async (req, res, next) => {
+  try {
+    const threshold = Math.max(0, Number(req.query.threshold ?? 20) || 0);
+    const mode = String(req.query.mode || "both").toLowerCase();
+    const [agents, gaps, performance] = await Promise.all([getAgents(), getGaps(), getPerformanceTabs()]);
+    const merged = combineAgentsAndGaps(attachProductionLogs(agents), gaps, performance);
+    const reps = merged.filter(agent => {
+      const role = String(agent.repType || "").toLowerCase();
+      return (mode === "both" && ["new rep", "leader"].includes(role)) ||
+        (mode === "new" && role === "new rep") || (mode === "leaders" && role === "leader");
+    }).map(agent => ({
+      repKey: agent.repKey, repName: agent.repName, office: agent.office, role: agent.repType,
+      previousWeek: agent.productionLog?.lastWeek ?? null,
+      sourceFile: agent.productionLog?.sourceFile || "",
+      focus: agent.stats?.["Biggest Gap"] || agent.stats?.biggestGap || agent.stats?.Gap || "Review funnel gaps",
+    })).filter(rep => rep.previousWeek !== null && rep.previousWeek < threshold);
+    res.json({ threshold, mode, reps });
+  } catch (error) { next(error); }
+});
+
 app.get("/api/production-reps", (_req, res) => res.json({ reps: getProductionRepDirectory() }));
 
 app.get("/api/work-matchups", async (_req, res, next) => {
@@ -486,18 +506,20 @@ app.post("/api/work-matchups", requireAdmin, async (req, res, next) => {
     const date = String(req.body.date || easternDateParts().date);
     const groups = Array.isArray(req.body.groups) ? req.body.groups : [];
     const saved = await saveWorkMatchups({ date, groups });
-    // Work Matchups owns team membership; Store Matchups owns store placement.
-    // Keep existing store choices, removing members no longer in the work teams.
+    // Teams have stable IDs. Work owns membership; stores own placement.
     const existingStores = await getStoreMatchups();
-    const validRepKeys = new Set(groups.flatMap(group => group.members || []).map(member => String(member.repKey)));
-    const currentMembers = new Map(groups.flatMap(group => group.members || []).map(member => [String(member.repKey), member]));
+    const previousPlacements = new Map();
+    for (const store of existingStores.groups || []) {
+      for (const id of store.teamIds || []) previousPlacements.set(String(id), String(store.id));
+    }
     const storeGroups = (existingStores.groups || []).map(store => {
-      const members = (store.members || []).filter(member => validRepKeys.has(String(member.repKey)))
-        .map(member => ({ ...member, ...currentMembers.get(String(member.repKey)) }));
-      return { ...store, members, production: members.reduce((sum, member) => sum + (Number(member.production) || 0), 0) };
+      const placedTeams = groups.filter(team => previousPlacements.get(String(team.id)) === String(store.id));
+      const members = placedTeams.flatMap(team => team.members || []);
+      return { ...store, teamIds: placedTeams.map(team => String(team.id)), members,
+        production: members.reduce((sum, member) => sum + (Number(member.production) || 0), 0) };
     });
     await saveStoreMatchups({ date, groups: storeGroups });
-    io.emit("stores:state", { stores: storeGroups, actor: sanitizeLiveName(req.body.actor || "Server"), action: "updated team membership from Work Matchups", at: new Date().toISOString() });
+    io.emit("stores:state", { stores: storeGroups, actor: sanitizeLiveName(req.body.actor || "Server"), action: "synchronized teams from Work Matchups", at: new Date().toISOString() });
     io.emit("work:state", { groups, actor: sanitizeLiveName(req.body.actor || req.admin?.repName || "Server"), action: String(req.body.action || "saved the work matchup board").slice(0, 180), at: new Date().toISOString() });
     res.json(saved);
   } catch (error) { next(error); }
@@ -515,9 +537,21 @@ app.post("/api/store-matchups", requireAdmin, async (req, res, next) => {
   try {
     const date = String(req.body.date || easternDateParts().date);
     const groups = Array.isArray(req.body.groups) ? req.body.groups : [];
-    const saved = await saveStoreMatchups({ date, groups });
+    // Never accept store-side edits to work-team membership; only team IDs / placement.
+    const work = await getWorkMatchups();
+    const teamById = new Map((work.groups || []).map(team => [String(team.id), team]));
+    const claimed = new Set();
+    const canonicalStores = groups.map(store => {
+      const teamIds = (store.teamIds || []).map(String).filter(id => {
+        if (!teamById.has(id) || claimed.has(id)) return false;
+        claimed.add(id); return true;
+      });
+      const members = teamIds.flatMap(id => teamById.get(id).members || []);
+      return { ...store, teamIds, members, production: members.reduce((sum, m) => sum + (Number(m.production) || 0), 0) };
+    });
+    const saved = await saveStoreMatchups({ date, groups: canonicalStores });
     io.emit("stores:state", {
-      stores: groups,
+      stores: canonicalStores,
       actor: sanitizeLiveName(req.body.actor || req.admin?.repName || "Server"),
       action: String(req.body.action || "saved the live store board").slice(0, 180),
       at: new Date().toISOString(),
