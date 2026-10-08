@@ -475,7 +475,7 @@ app.post("/api/work-matchups/generate", requireAdmin, async (_req, res, next) =>
   } catch (error) { next(error); }
 });
 
-app.get("/api/training-watch", async (req, res, next) => {
+app.get("/api/training-watch", requireAdmin, async (req, res, next) => {
   try {
     const threshold = Math.max(0, Number(req.query.threshold ?? 20) || 0);
     const mode = String(req.query.mode || "both").toLowerCase();
