@@ -1488,8 +1488,8 @@ async function selectCampaign(page, campaignName, occurrence = 0) {
     for (const select of selects) {
       const options = [...select.options].filter(
         (candidate) =>
-          (candidate.textContent || "").trim().toLowerCase() ===
-          wantedCampaign.trim().toLowerCase()
+          (candidate.textContent || "").trim() ===
+          wantedCampaign.trim()
       );
       const option = options[wantedOccurrence];
 

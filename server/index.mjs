@@ -411,9 +411,43 @@ app.post("/api/agents", requireAdmin, async (req, res, next) => {
 app.put("/api/agents/:repKey", requireAdmin, async (req, res, next) => {
   try {
     const agents = await getAgents();
-    const index = agents.findIndex((agent) => agent.repKey === req.params.repKey);
-    if (index < 0) return res.status(404).json({ error: "Agent not found" });
-    agents[index] = { ...agents[index], ...req.body, repKey: agents[index].repKey };
+    let index = agents.findIndex((agent) => String(agent.repKey) === String(req.params.repKey));
+
+    // Production-log reps can appear in Attendance before being imported into
+    // the persistent Agents sheet. Materialize that rep on the first edit.
+    // Only accept IDs actually discovered in the production logs; never create
+    // arbitrary Agents from an unknown identifier.
+    if (index < 0) {
+      const discovered = productionRepDirectory().find(
+        (rep) => String(rep.repKey) === String(req.params.repKey)
+      );
+      if (!discovered) return res.status(404).json({ error: "Agent not found" });
+
+      const normalize = (name) => String(name || "")
+        .normalize("NFKD").replace(/[\u0300-\u036f]/g, "")
+        .replace(/\s*\((?:PL|L|OWNER|TRAINER)\)\s*$/i, "")
+        .toLowerCase().replace(/[^a-z0-9]/g, "");
+      const office = canonicalOffice(discovered.office);
+      index = agents.findIndex((agent) =>
+        canonicalOffice(agent.office) === office &&
+        normalize(agent.repName) === normalize(discovered.repName)
+      );
+      if (index < 0) {
+        agents.push({
+          repKey: discovered.repKey,
+          repName: discovered.repName,
+          office,
+          repType: discovered.repType || "New Rep",
+          team: "", teamLead: "", trainer: "",
+          attendance: "in", experienceLevel: "",
+        });
+        index = agents.length - 1;
+      }
+    }
+
+    // Identity fields cannot be changed via a routine Attendance edit.
+    const { repKey: _ignoredKey, office: _ignoredOffice, ...changes } = req.body || {};
+    agents[index] = { ...agents[index], ...changes, repKey: agents[index].repKey };
     await replaceAgents(agents);
     io.emit("agents:update", agents[index]);
     res.json(agents[index]);
