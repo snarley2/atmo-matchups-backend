@@ -75,11 +75,19 @@ const ADMIN_SESSION_HOURS = 12;
 const adminPassword = String(process.env.ADMIN_LOGIN_PASSWORD || "");
 const adminSessionSecret = String(process.env.ADMIN_SESSION_SECRET || adminPassword);
 
+function getAgentRole(agent) {
+  // Accept legacy/variant Agents sheet headers without granting access from
+  // production-log guesses. Eligibility still comes from the Agents sheet.
+  const normalized = Object.fromEntries(Object.entries(agent || {}).map(([key,value]) =>
+    [String(key).replace(/[^a-z0-9]/gi, "").toLowerCase(), value]));
+  return String(normalized.reptype || normalized.role || normalized.rank ||
+    normalized.position || normalized.title || "").trim();
+}
+
 function isAdminRole(value) {
-  const role = String(value || "").trim().toLowerCase();
+  const role = String(value || "").trim().toLowerCase().replace(/[\s_-]+/g, " ");
   if (!role) return false;
-  return role === "trainer" || role === "manager" || role === "admin" || role === "owner" ||
-    role.includes("trainer") || role.includes("manager") || role.includes("director");
+  return /(?:^|\b)(trainer|assistant manager|manager|director|owner|administrator|admin|executive)(?:\b|$)/.test(role);
 }
 
 function safeEqualText(a, b) {
@@ -93,7 +101,7 @@ function issueAdminToken(agent) {
   const payload = Buffer.from(JSON.stringify({
     repKey: agent.repKey,
     repName: agent.repName,
-    role: agent.repType,
+    role: getAgentRole(agent),
     exp: Date.now() + ADMIN_SESSION_HOURS * 60 * 60 * 1000,
   })).toString("base64url");
   const signature = crypto.createHmac("sha256", adminSessionSecret).update(payload).digest("base64url");
@@ -352,10 +360,10 @@ app.post("/api/auth/admin", async (req, res, next) => {
       agents.find((item) => requestedName && String(item.repName || "").trim().toLowerCase() === requestedName);
 
     if (!agent) return res.status(404).json({ error: "Admin user not found" });
-    if (!isAdminRole(agent.repType)) return res.status(403).json({ error: "Admin access is limited to trainers and above" });
+    if (!isAdminRole(getAgentRole(agent))) return res.status(403).json({ error: "Admin access is limited to trainers and above" });
 
     const token = issueAdminToken(agent);
-    res.json({ token, user: { repKey: agent.repKey, repName: agent.repName, repType: agent.repType } });
+    res.json({ token, user: { repKey: agent.repKey, repName: agent.repName, repType: getAgentRole(agent) } });
   } catch (error) { next(error); }
 });
 
@@ -364,9 +372,9 @@ app.post("/api/auth/admin", async (req, res, next) => {
 app.get("/api/auth/admin/candidates", async (_req, res, next) => {
   try {
     const agents = await getAgents();
-    res.json({ agents: agents.filter(agent => isAdminRole(agent.repType))
+    res.json({ agents: agents.filter(agent => isAdminRole(getAgentRole(agent)))
       .map(agent => ({ repKey: agent.repKey, repName: agent.repName,
-        repType: agent.repType, office: agent.office }))
+        repType: getAgentRole(agent), office: agent.office }))
       .sort((a, b) => a.repName.localeCompare(b.repName)) });
   } catch (error) { next(error); }
 });
@@ -406,7 +414,7 @@ app.get("/api/training-watch", requireAdmin, async (req, res, next) => {
       return mode === "new" ? newRep : mode === "leaders" ? leader : (newRep || leader);
     }).map(agent => ({
       repKey: agent.repKey, repName: agent.repName, office: agent.office,
-      role: agent.repType, previousWeek: agent.productionLog?.lastWeek ?? null,
+      role: getAgentRole(agent), previousWeek: agent.productionLog?.lastWeek ?? null,
       focus: agent.stats?.["Biggest Gap Stage"] || agent.stats?.["Biggest Gap"] ||
         agent.stats?.biggestGap || agent.stats?.Gap || "Review funnel gaps",
     })).filter(rep => rep.previousWeek !== null &&
