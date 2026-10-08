@@ -121,6 +121,33 @@ export async function getAgents() {
   return rowsToObjects(tab).filter((a) => a.repKey || a.repName);
 }
 
+// Append-only production imports: never clear or rewrite Attendance rows.
+export async function appendMissingAgents(additions = []) {
+  if (!additions.length) return 0;
+  const client = await sheetsClient();
+  await ensureTab(client, agentsTab, AGENT_HEADERS);
+  // Re-read immediately before the write to avoid importing known rep identities.
+  const existing = await getAgents();
+  const normalize = value => String(value || "").toLowerCase().replace(/\([^)]*\)/g, "").replace(/[^a-z0-9]/g, "");
+  const key = agent => `${normalize(agent.office)}|${normalize(agent.repName)}`;
+  const keys = new Set(existing.map(key));
+  const fresh = additions.filter(agent => {
+    const k = key(agent);
+    if (!k || keys.has(k)) return false;
+    keys.add(k); return true;
+  });
+  if (!fresh.length) return 0;
+  const rows = fresh.map(agent => AGENT_HEADERS.map(field => agent[field] ?? ""));
+  await client.spreadsheets.values.append({
+    spreadsheetId,
+    range: `'${agentsTab}'!A:I`,
+    valueInputOption: "RAW",
+    insertDataOption: "INSERT_ROWS",
+    requestBody: {values: rows},
+  });
+  return fresh.length;
+}
+
 export async function replaceAgents(agents) {
   const client = await sheetsClient();
   await ensureTab(client, agentsTab, AGENT_HEADERS);

@@ -5,7 +5,7 @@ import { Server as SocketIOServer } from "socket.io";
 import cors from "cors";
 import crypto from "node:crypto";
 import cron from "node-cron";
-import { getAgents, replaceAgents, getGaps, getPerformanceTabs, saveMatchups, getDraftMatchups, saveDraftMatchups, getFinalMatchups, saveStoreMatchups, getStoreMatchups, saveWorkMatchups, getWorkMatchups, getFieldNotes, addFieldNote, getManualNumbers, upsertManualNumbers, getSuggestions, addSuggestion, getNumbersTracking } from "./sheets.mjs";
+import { getAgents, replaceAgents, appendMissingAgents, getGaps, getPerformanceTabs, saveMatchups, getDraftMatchups, saveDraftMatchups, getFinalMatchups, saveStoreMatchups, getStoreMatchups, saveWorkMatchups, getWorkMatchups, getFieldNotes, addFieldNote, getManualNumbers, upsertManualNumbers, getSuggestions, addSuggestion, getNumbersTracking } from "./sheets.mjs";
 import { combineAgentsAndGaps, generateGroups, generateStoreGroups, generateWorkGroups, STORE_CATALOG } from "./logic.mjs";
 import { attachProductionLogs, expandAgentsFromProduction, productionRepDirectory } from "./production-csv.mjs";
 import { runDailyAutomation, isDailyAutomationRunning } from "../run.mjs";
@@ -75,19 +75,11 @@ const ADMIN_SESSION_HOURS = 12;
 const adminPassword = String(process.env.ADMIN_LOGIN_PASSWORD || "");
 const adminSessionSecret = String(process.env.ADMIN_SESSION_SECRET || adminPassword);
 
-function getAgentRole(agent) {
-  // Accept legacy/variant Agents sheet headers without granting access from
-  // production-log guesses. Eligibility still comes from the Agents sheet.
-  const normalized = Object.fromEntries(Object.entries(agent || {}).map(([key,value]) =>
-    [String(key).replace(/[^a-z0-9]/gi, "").toLowerCase(), value]));
-  return String(normalized.reptype || normalized.role || normalized.rank ||
-    normalized.position || normalized.title || "").trim();
-}
-
 function isAdminRole(value) {
-  const role = String(value || "").trim().toLowerCase().replace(/[\s_-]+/g, " ");
+  const role = String(value || "").trim().toLowerCase();
   if (!role) return false;
-  return /(?:^|\b)(trainer|assistant manager|manager|director|owner|administrator|admin|executive)(?:\b|$)/.test(role);
+  return role === "trainer" || role === "manager" || role === "admin" || role === "owner" ||
+    role.includes("trainer") || role.includes("manager") || role.includes("director");
 }
 
 function safeEqualText(a, b) {
@@ -101,7 +93,7 @@ function issueAdminToken(agent) {
   const payload = Buffer.from(JSON.stringify({
     repKey: agent.repKey,
     repName: agent.repName,
-    role: getAgentRole(agent),
+    role: agent.repType,
     exp: Date.now() + ADMIN_SESSION_HOURS * 60 * 60 * 1000,
   })).toString("base64url");
   const signature = crypto.createHmac("sha256", adminSessionSecret).update(payload).digest("base64url");
@@ -360,22 +352,10 @@ app.post("/api/auth/admin", async (req, res, next) => {
       agents.find((item) => requestedName && String(item.repName || "").trim().toLowerCase() === requestedName);
 
     if (!agent) return res.status(404).json({ error: "Admin user not found" });
-    if (!isAdminRole(getAgentRole(agent))) return res.status(403).json({ error: "Admin access is limited to trainers and above" });
+    if (!isAdminRole(agent.repType)) return res.status(403).json({ error: "Admin access is limited to trainers and above" });
 
     const token = issueAdminToken(agent);
-    res.json({ token, user: { repKey: agent.repKey, repName: agent.repName, repType: getAgentRole(agent) } });
-  } catch (error) { next(error); }
-});
-
-// Login choices are independent of the currently selected office.
-// Only persistent Agents sheet roles can grant admin access.
-app.get("/api/auth/admin/candidates", async (_req, res, next) => {
-  try {
-    const agents = await getAgents();
-    res.json({ agents: agents.filter(agent => isAdminRole(getAgentRole(agent)))
-      .map(agent => ({ repKey: agent.repKey, repName: agent.repName,
-        repType: getAgentRole(agent), office: agent.office }))
-      .sort((a, b) => a.repName.localeCompare(b.repName)) });
+    res.json({ token, user: { repKey: agent.repKey, repName: agent.repName, repType: agent.repType } });
   } catch (error) { next(error); }
 });
 
@@ -386,43 +366,18 @@ app.get("/api/auth/admin/me", requireAdmin, async (req, res) => {
 app.get("/api/production-reps", async (_req, res) => {
   res.json({ reps: productionRepDirectory() });
 });
-app.post("/api/production-reps/import", requireAdmin, async (_req,res,next)=>{
+app.post("/api/production-reps/import", requireAdmin, async (_req, res, next) => {
   try {
-    const current=await getAgents();
-    const combined=expandAgentsFromProduction(current);
-    const added=combined.length-current.length;
-    if(added) await replaceAgents(combined);
-    res.json({added,total:combined.length});
-  } catch(error){next(error)}
-});
-// Coaching's weekly training list: previous-week electric, not WorkMyT
-// last-day activity. Keep missing previous-week totals distinct from zero.
-app.get("/api/training-watch", requireAdmin, async (req, res, next) => {
-  try {
-    const threshold = Math.max(0, Number(req.query.threshold ?? 20) || 0);
-    const mode = String(req.query.mode || "both").toLowerCase();
-    const [agents, gaps, performance] = await Promise.all([
-      getAgents(), getGaps(), getPerformanceTabs()
-    ]);
-    const merged = combineAgentsAndGaps(
-      attachProductionLogs(expandAgentsFromProduction(agents)), gaps, performance
-    );
-    const reps = merged.filter(agent => {
-      const role = String(agent.repType || "").trim().toLowerCase();
-      const newRep = role === "new rep" || role === "new" || role === "trainee";
-      const leader = role === "leader" || role === "team leader";
-      return mode === "new" ? newRep : mode === "leaders" ? leader : (newRep || leader);
-    }).map(agent => ({
-      repKey: agent.repKey, repName: agent.repName, office: agent.office,
-      role: getAgentRole(agent), previousWeek: agent.productionLog?.lastWeek ?? null,
-      focus: agent.stats?.["Biggest Gap Stage"] || agent.stats?.["Biggest Gap"] ||
-        agent.stats?.biggestGap || agent.stats?.Gap || "Review funnel gaps",
-    })).filter(rep => rep.previousWeek !== null &&
-      Number.isFinite(Number(rep.previousWeek)) && Number(rep.previousWeek) < threshold);
-    res.json({ threshold, mode, reps });
+    const current = await getAgents();
+    // Do not run bulk imports against a missing/damaged roster.
+    if (current.length < 6) return res.status(409).json({error:
+      "Agents roster appears incomplete. Restore the Agents tab before importing production reps."});
+    const combined = expandAgentsFromProduction(current);
+    const additions = combined.slice(current.length).map(({ productionLog, ...agent }) => agent);
+    const added = await appendMissingAgents(additions);
+    res.json({ added, total: current.length + added });
   } catch (error) { next(error); }
 });
-
 app.get("/api/work-reps", async (_req, res, next) => {
   try { res.json({reps: attachProductionLogs(expandAgentsFromProduction(await getAgents()))}); }
   catch (error) { next(error); }

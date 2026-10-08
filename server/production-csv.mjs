@@ -232,7 +232,9 @@ export function productionRepDirectory() {
     if (!office) continue;
     const rawName = String(record.repName || "").replace(/\s*\((PL|L|OWNER|TRAINER)\)\s*$/i, "").trim();
     const repName = rawName.includes(",") ? rawName.split(",").slice(1).join(",").trim()+" "+rawName.split(",")[0].trim() : rawName;
-    if (!repName) continue;
+    // Production sheets contain notes and summary headings that are not agents.
+    if (!repName || !/[A-Za-z]{2,}\s+[A-Za-z]{2,}/.test(repName) ||
+        /^(?:roll\s*call|notes?|bonuses?\s*\/?\s*notes?|standards?\s+raised|championship|totals?|team\s+total|office\s+total|average)\b/i.test(repName)) continue;
     const key = `${office}|${nameKeys(repName).at(-1) || repName.toLowerCase()}`;
     const entry = { ...record, office, repName,
       repKey: `prod-${crypto.createHash("sha256").update(key).digest("hex").slice(0,24)}`,
@@ -245,9 +247,29 @@ export function productionRepDirectory() {
   }
   return [...byKey.values()];
 }
+// Attendance/Agents is authoritative for role, team, trainer, and attendance.
+// Production logs only supply newly discovered identities and production metrics.
 export function expandAgentsFromProduction(agents = []) {
-  const normalized = value=>nameKeys(value).at(-1) || String(value||"").toLowerCase().replace(/[^a-z0-9]/g,"");
-  const existing = new Set(agents.map(a=>`${canonicalOffice(a.office)}|${normalized(a.repName)}`));
-  const discovered = productionRepDirectory().filter(rep=>!existing.has(`${rep.office}|${normalized(rep.repName)}`));
-  return [...agents,...discovered];
+  const existing = new Set();
+  const identities = (rep) => nameKeys(rep.repName)
+    .map((key) => `${canonicalOffice(rep.office)}|${key}`);
+  for (const agent of agents) for (const key of identities(agent)) existing.add(key);
+
+  const discovered = [];
+  for (const rep of productionRepDirectory()) {
+    const keys = identities(rep);
+    if (!keys.length || keys.some((key) => existing.has(key))) continue;
+    discovered.push({
+      repKey: rep.repKey,
+      repName: rep.repName,
+      office: canonicalOffice(rep.office),
+      repType: "New Rep", // provisional only; never replace existing Attendance roles
+      team: "", teamLead: "", trainer: "", attendance: "in",
+      experienceLevel: "",
+      productionLog: rep.productionLog,
+    });
+    for (const key of keys) existing.add(key);
+  }
+  // Existing Agents objects are retained untouched, in their original order.
+  return [...agents, ...discovered];
 }
