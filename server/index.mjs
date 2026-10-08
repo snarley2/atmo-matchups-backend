@@ -7,7 +7,7 @@ import crypto from "node:crypto";
 import cron from "node-cron";
 import { getAgents, replaceAgents, getGaps, getPerformanceTabs, saveMatchups, getDraftMatchups, saveDraftMatchups, getFinalMatchups, saveStoreMatchups, getStoreMatchups, saveWorkMatchups, getWorkMatchups, getFieldNotes, addFieldNote, getManualNumbers, upsertManualNumbers, getSuggestions, addSuggestion, getNumbersTracking } from "./sheets.mjs";
 import { combineAgentsAndGaps, generateGroups, generateStoreGroups, generateWorkGroups, STORE_CATALOG } from "./logic.mjs";
-import { attachProductionLogs } from "./production-csv.mjs";
+import { attachProductionLogs, getProductionRepDirectory } from "./production-csv.mjs";
 import { runDailyAutomation, isDailyAutomationRunning } from "../run.mjs";
 import { DEFAULT_OFFICE, OFFICES, canonicalOffice } from "../offices.mjs";
 
@@ -475,6 +475,8 @@ app.post("/api/work-matchups/generate", requireAdmin, async (_req, res, next) =>
   } catch (error) { next(error); }
 });
 
+app.get("/api/production-reps", (_req, res) => res.json({ reps: getProductionRepDirectory() }));
+
 app.get("/api/work-matchups", async (_req, res, next) => {
   try { res.json(await getWorkMatchups()); } catch (error) { next(error); }
 });
@@ -484,6 +486,18 @@ app.post("/api/work-matchups", requireAdmin, async (req, res, next) => {
     const date = String(req.body.date || easternDateParts().date);
     const groups = Array.isArray(req.body.groups) ? req.body.groups : [];
     const saved = await saveWorkMatchups({ date, groups });
+    // Work Matchups owns team membership; Store Matchups owns store placement.
+    // Keep existing store choices, removing members no longer in the work teams.
+    const existingStores = await getStoreMatchups();
+    const validRepKeys = new Set(groups.flatMap(group => group.members || []).map(member => String(member.repKey)));
+    const currentMembers = new Map(groups.flatMap(group => group.members || []).map(member => [String(member.repKey), member]));
+    const storeGroups = (existingStores.groups || []).map(store => {
+      const members = (store.members || []).filter(member => validRepKeys.has(String(member.repKey)))
+        .map(member => ({ ...member, ...currentMembers.get(String(member.repKey)) }));
+      return { ...store, members, production: members.reduce((sum, member) => sum + (Number(member.production) || 0), 0) };
+    });
+    await saveStoreMatchups({ date, groups: storeGroups });
+    io.emit("stores:state", { stores: storeGroups, actor: sanitizeLiveName(req.body.actor || "Server"), action: "updated team membership from Work Matchups", at: new Date().toISOString() });
     io.emit("work:state", { groups, actor: sanitizeLiveName(req.body.actor || req.admin?.repName || "Server"), action: String(req.body.action || "saved the work matchup board").slice(0, 180), at: new Date().toISOString() });
     res.json(saved);
   } catch (error) { next(error); }
