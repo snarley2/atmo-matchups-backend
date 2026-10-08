@@ -71,6 +71,7 @@ function parseAiLog(rows, fileName) {
   const partialIndexes = detail.map((value, index) => String(value || "").trim().toLowerCase() === "p" && index < currentIndex ? index : -1).filter((index) => index >= 0);
   return rows.slice(headerIndex + 2).flatMap((row) => {
     const repName = String(row[0] || "").trim();
+    if (/^\s*--|\bteam\b\s*--|^\s*(?:daily|weekly|office)\s*totals?/i.test(repName)) return [];
     const keys = nameKeys(repName);
     if (!keys.length) return [];
     const partials = partialIndexes.reduce((sum, index) => sum + number(row[index]), 0);
@@ -184,7 +185,7 @@ export function getProductionLogRecords() {
       ?parseNoctisLog(rows,fileName):parseStandardLog(rows,fileName);
     const dates=dailyDates(rows,fileName);
     return records.map(record=>{
-      const source=rows.find(row=>nameKeys(row[0]).some(k=>record.keys.includes(k)));
+      const source=rows.find(row=>!/^\s*--/.test(String(row[0]||'')) && nameKeys(row[0]).some(k=>record.keys.includes(k)));
       const now = new Date();
       const today = new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).format(now);
       const oldest = new Date(`${today}T12:00:00Z`); oldest.setUTCDate(oldest.getUTCDate()-13);
