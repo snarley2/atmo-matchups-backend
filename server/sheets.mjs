@@ -158,18 +158,64 @@ export async function appendMissingAgents(additions = []) {
   return fresh.length;
 }
 
-export async function replaceAgents(agents) {
+// Agents are authoritative user-managed data. Never clear and rebuild this tab.
+// Locate the live row by its stable key before every targeted write.
+async function agentRowForKey(repKey) {
+  const tab = await readTab(agentsTab);
+  const col = tab.headers.indexOf("repKey");
+  if (col < 0) throw new Error("Agents sheet has no repKey header; refusing write");
+  const index = tab.rows.findIndex(row => String(row[col] || "") === String(repKey));
+  return index < 0 ? null : { rowNumber: index + 2, tab };
+}
+
+export async function appendAgent(agent) {
+  if (!String(agent.repName || "").trim() || !String(agent.repKey || "").trim())
+    throw new Error("Missing rep identity");
+  const existing = await agentRowForKey(agent.repKey);
+  if (existing) throw new Error("Agent key already exists");
   const client = await sheetsClient();
-  await ensureTab(client, agentsTab, AGENT_HEADERS);
-  const rows = agents.map((agent) => AGENT_HEADERS.map((key) => agent[key] ?? ""));
-  await client.spreadsheets.values.clear({ spreadsheetId, range: `'${agentsTab}'!A:Z` });
-  await client.spreadsheets.values.update({
-    spreadsheetId,
-    range: `'${agentsTab}'!A1`,
-    valueInputOption: "RAW",
-    requestBody: { values: [AGENT_HEADERS, ...rows] },
+  await client.spreadsheets.values.append({
+    spreadsheetId, range: `'${agentsTab}'!A:I`, valueInputOption: "RAW",
+    insertDataOption: "INSERT_ROWS",
+    requestBody: { values: [AGENT_HEADERS.map(field => agent[field] ?? "")] },
   });
-  return agents;
+  return agent;
+}
+
+export async function updateAgent(repKey, changes) {
+  const located = await agentRowForKey(repKey);
+  if (!located) return null;
+  const {rowNumber, tab} = located;
+  const header = tab.headers;
+  const current = Object.fromEntries(header.map((name,i)=>[name,tab.rows[rowNumber-2][i] ?? ""]));
+  // Preserve identity and any fields not explicitly changed.
+  const allowed = ["repType", "team", "teamLead", "trainer", "attendance", "experienceLevel"];
+  const next = {...current};
+  for (const field of allowed) if (Object.hasOwn(changes,field)) next[field] = changes[field] ?? "";
+  const client = await sheetsClient();
+  // Update only D:I; never touch the other reps or identity columns.
+  await client.spreadsheets.values.update({
+    spreadsheetId, range: `'${agentsTab}'!D${rowNumber}:I${rowNumber}`,
+    valueInputOption: "RAW", requestBody: {values: [[...allowed.map(field=>next[field] ?? "")]]},
+  });
+  return next;
+}
+
+export async function deleteAgent(repKey) {
+  const located = await agentRowForKey(repKey);
+  if (!located) return false;
+  const client = await sheetsClient();
+  const book = await client.spreadsheets.get({spreadsheetId,fields:"sheets.properties"});
+  const sheet = book.data.sheets?.find(s=>s.properties?.title===agentsTab);
+  if (!sheet) throw new Error("Agents sheet missing");
+  await client.spreadsheets.batchUpdate({spreadsheetId,requestBody:{requests:[{
+    deleteDimension:{range:{sheetId:sheet.properties.sheetId,dimension:"ROWS",startIndex:located.rowNumber-1,endIndex:located.rowNumber}}
+  }]}});
+  return true;
+}
+
+export async function replaceAgents(_agents) {
+  throw new Error("Unsafe bulk Agents replacement disabled. Use appendAgent/updateAgent/deleteAgent.");
 }
 
 export async function getGaps() {

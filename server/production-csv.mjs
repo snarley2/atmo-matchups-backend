@@ -225,6 +225,17 @@ export function productionOffice(fileName) {
   if (name.includes("ai production") || name.includes("ai_production")) return "MADHAV MEHTA";
   return null;
 }
+// Restrictive identity check. Production sheets include decorative labels and KPIs.
+export function isProductionRepName(value) {
+  const name = String(value || "").replace(/\s*\((?:PL|L|OWNER|TRAINER)\)\s*$/i, "").trim();
+  if (!name || name.length > 70 || /[\d:%📊]/u.test(name)) return false;
+  if (/^(?:roll\s*call|notes?|bonus(?:es|'?s)?(?:\s*\/\s*notes?)?|standards?\s+raised|championship|agents?\s+working|gas\s+attach|rep\s+name\s+colou?rs?|daily\s+metrics|totals?|team|office|average|legend|key)\b/i.test(name)) return false;
+  if (/\b(?:notes?|metrics?|bonus|legend|colou?rs?|attach|percentage|summary|standard|quota|goals?)\b/i.test(name)) return false;
+  // Names may contain hyphens/apostrophes but should be 2-5 name words.
+  const words = name.replace(/[,.'’\-]/g," ").split(/\s+/).filter(Boolean);
+  return words.length >= 2 && words.length <= 5 && words.every(w=>/^[A-Za-zÀ-ÿ]{2,}$/.test(w));
+}
+
 export function productionRepDirectory() {
   const byKey = new Map();
   for (const record of getProductionLogRecords()) {
@@ -233,8 +244,7 @@ export function productionRepDirectory() {
     const rawName = String(record.repName || "").replace(/\s*\((PL|L|OWNER|TRAINER)\)\s*$/i, "").trim();
     const repName = rawName.includes(",") ? rawName.split(",").slice(1).join(",").trim()+" "+rawName.split(",")[0].trim() : rawName;
     // Production sheets contain notes and summary headings that are not agents.
-    if (!repName || !/[A-Za-z]{2,}\s+[A-Za-z]{2,}/.test(repName) ||
-        /^(?:roll\s*call|notes?|bonuses?\s*\/?\s*notes?|standards?\s+raised|championship|totals?|team\s+total|office\s+total|average)\b/i.test(repName)) continue;
+    if (!isProductionRepName(repName)) continue;
     const key = `${office}|${nameKeys(repName).at(-1) || repName.toLowerCase()}`;
     const entry = { ...record, office, repName,
       repKey: `prod-${crypto.createHash("sha256").update(key).digest("hex").slice(0,24)}`,

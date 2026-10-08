@@ -5,7 +5,7 @@ import { Server as SocketIOServer } from "socket.io";
 import cors from "cors";
 import crypto from "node:crypto";
 import cron from "node-cron";
-import { getAgents, replaceAgents, appendMissingAgents, getGaps, getPerformanceTabs, saveMatchups, getDraftMatchups, saveDraftMatchups, getFinalMatchups, saveStoreMatchups, getStoreMatchups, saveWorkMatchups, getWorkMatchups, getFieldNotes, addFieldNote, getManualNumbers, upsertManualNumbers, getSuggestions, addSuggestion, getNumbersTracking } from "./sheets.mjs";
+import { getAgents, appendAgent, updateAgent, deleteAgent, appendMissingAgents, getGaps, getPerformanceTabs, saveMatchups, getDraftMatchups, saveDraftMatchups, getFinalMatchups, saveStoreMatchups, getStoreMatchups, saveWorkMatchups, getWorkMatchups, getFieldNotes, addFieldNote, getManualNumbers, upsertManualNumbers, getSuggestions, addSuggestion, getNumbersTracking } from "./sheets.mjs";
 import { combineAgentsAndGaps, generateGroups, generateStoreGroups, generateWorkGroups, STORE_CATALOG } from "./logic.mjs";
 import { attachProductionLogs, expandAgentsFromProduction, productionRepDirectory } from "./production-csv.mjs";
 import { runDailyAutomation, isDailyAutomationRunning } from "../run.mjs";
@@ -404,64 +404,42 @@ app.post("/api/agents", requireAdmin, async (req, res, next) => {
           : "",
     };
     if (!agent.repName) return res.status(400).json({ error: "repName is required" });
-    agents.push(agent);
-    await replaceAgents(agents);
+    await appendAgent(agent);
     res.status(201).json(agent);
   } catch (error) { next(error); }
 });
 
 app.put("/api/agents/:repKey", requireAdmin, async (req, res, next) => {
   try {
-    const agents = await getAgents();
-    let index = agents.findIndex((agent) => String(agent.repKey) === String(req.params.repKey));
-
-    // Production-log reps can appear in Attendance before being imported into
-    // the persistent Agents sheet. Materialize that rep on the first edit.
-    // Only accept IDs actually discovered in the production logs; never create
-    // arbitrary Agents from an unknown identifier.
-    if (index < 0) {
-      const discovered = productionRepDirectory().find(
-        (rep) => String(rep.repKey) === String(req.params.repKey)
-      );
+    const repKey = String(req.params.repKey);
+    let updated = await updateAgent(repKey, req.body || {});
+    if (!updated) {
+      // Production-only reps may be edited before their first import.
+      const discovered = productionRepDirectory().find(rep => String(rep.repKey) === repKey);
       if (!discovered) return res.status(404).json({ error: "Agent not found" });
-
-      const normalize = (name) => String(name || "")
-        .normalize("NFKD").replace(/[\u0300-\u036f]/g, "")
-        .replace(/\s*\((?:PL|L|OWNER|TRAINER)\)\s*$/i, "")
-        .toLowerCase().replace(/[^a-z0-9]/g, "");
-      const office = canonicalOffice(discovered.office);
-      index = agents.findIndex((agent) =>
-        canonicalOffice(agent.office) === office &&
-        normalize(agent.repName) === normalize(discovered.repName)
-      );
-      if (index < 0) {
-        agents.push({
-          repKey: discovered.repKey,
-          repName: discovered.repName,
-          office,
-          repType: discovered.repType || "New Rep",
-          team: "", teamLead: "", trainer: "",
-          attendance: "in", experienceLevel: "",
-        });
-        index = agents.length - 1;
+      const existing = await getAgents();
+      const normalize = text => String(text || "").normalize("NFKD")
+        .replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      const match = existing.find(agent => canonicalOffice(agent.office) === canonicalOffice(discovered.office) &&
+        normalize(agent.repName) === normalize(discovered.repName));
+      if (match) updated = await updateAgent(match.repKey, req.body || {});
+      else {
+        const provisional = {repKey:discovered.repKey,repName:discovered.repName,
+          office:canonicalOffice(discovered.office),repType:"New Rep",team:"",teamLead:"",
+          trainer:"",attendance:"in",experienceLevel:""};
+        await appendAgent(provisional);
+        updated = await updateAgent(provisional.repKey, req.body || {});
       }
     }
-
-    // Identity fields cannot be changed via a routine Attendance edit.
-    const { repKey: _ignoredKey, office: _ignoredOffice, ...changes } = req.body || {};
-    agents[index] = { ...agents[index], ...changes, repKey: agents[index].repKey };
-    await replaceAgents(agents);
-    io.emit("agents:update", agents[index]);
-    res.json(agents[index]);
+    io.emit("agents:update", updated);
+    res.json(updated);
   } catch (error) { next(error); }
 });
 
 app.delete("/api/agents/:repKey", requireAdmin, async (req, res, next) => {
   try {
-    const agents = await getAgents();
-    const nextAgents = agents.filter((agent) => agent.repKey !== req.params.repKey);
-    if (nextAgents.length === agents.length) return res.status(404).json({ error: "Agent not found" });
-    await replaceAgents(nextAgents);
+    const removed = await deleteAgent(req.params.repKey);
+    if (!removed) return res.status(404).json({error:"Agent not found"});
     res.status(204).end();
   } catch (error) { next(error); }
 });
