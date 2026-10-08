@@ -108,45 +108,126 @@ function parseStandardLog(rows, fileName) {
   });
 }
 
+// Dated daily production, separate from weekly totals. Empty/X cells are not worked;
+// a numeric zero IS worked. The latest valid day wins, not the largest sale total.
+function dailyDates(rows, fileName) {
+  const year = Number(fileName.match(/20\d{2}/)?.[0]) || 2026;
+  const monthNumbers = {jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
+  let month = null;
+  const weekRange = rows.slice(0, 8).map(row => row.join(' ')).join(' ').match(/Week of\s+([A-Za-z]+)\s+\d+/i);
+  if (weekRange) month = monthNumbers[weekRange[1].slice(0,3).toLowerCase()] || null;
+  for (const row of rows.slice(0, 9)) {
+    const candidates = [];
+    for (let i=1;i<row.length;i++) {
+      const value=String(row[i]||'').trim();
+      const full=value.match(/^(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})/i);
+      const short=value.match(/^(?:SUN|MON|TUE|WED|THU|THUR|FRI|SAT)\s+(\d{1,2})$/i);
+      if (full) candidates.push({index:i, day:+full[2],month:monthNumbers[full[1].slice(0,3).toLowerCase()]});
+      else if(short) candidates.push({index:i,day:+short[1],month:null});
+    }
+    if (candidates.length>=5) {
+      // Noctis/AI day columns use weekday-only headings; anchor month from
+      // the file's ending date and roll backward across month boundaries.
+      const ending=fileName.match(/(\d{1,2})[._-](\d{1,2})(?:[._-](?:20)?\d{2})?\.tsv$/i);
+      let currentMonth=month || (ending?+ending[1]:null);
+      if (!currentMonth && ending) currentMonth=+ending[1];
+      let previousDay=null;
+      for (const c of candidates) {
+        if(c.month) currentMonth=c.month;
+        else if (previousDay!==null && c.day<previousDay) currentMonth=(currentMonth%12)+1;
+        if(currentMonth) {
+          const y = currentMonth===12 && c.day>20 && year===2026 ? year : year;
+          c.date=`${y}-${String(currentMonth).padStart(2,'0')}-${String(c.day).padStart(2,'0')}`;
+        }
+        previousDay=c.day;
+      }
+      return candidates.filter(c=>c.date);
+    }
+  }
+  return [];
+}
+
+function dailyForRep(row, dates) {
+  return dates.flatMap(({index,date})=>{
+    const cells=row.slice(index,index+3).map(v=>String(v??'').trim());
+    if(!cells.some(v=>v!=='' && !/^x$/i.test(v)))return [];
+    // Only actual numbers indicate work. Never treat a comment or label as a sale.
+    if(!cells.some(v=>/^-?\d+(?:\.\d+)?$/.test(v)))return [];
+    const [electric,gas,partials]=cells.map(v=>/^-?\d+(?:\.\d+)?$/.test(v)?Number(v):0);
+    return [{date,electric,gas,partials,production:(electric+partials)*40+gas*18}];
+  }).sort((a,b)=>b.date.localeCompare(a.date));
+}
+
+function parseNoctisLog(rows, fileName) {
+  const headerIndex=rows.findIndex(row=>row.some(value=>/^T Ele$/i.test(String(value||'').trim())));
+  if(headerIndex<0)return [];
+  const header=rows[headerIndex].map(value=>String(value||'').trim());
+  const total=header.findIndex(value=>/^T Ele$/i.test(value));
+  const gas=header.findIndex(value=>/^T Gas$/i.test(value));
+  const previous=header.findIndex(value=>/^LW T El$/i.test(value));
+  const two=header.findIndex(value=>/^LW2 T El$/i.test(value));
+  return rows.slice(headerIndex+1).flatMap(row=>{
+    const repName=String(row[0]||'').trim(), keys=nameKeys(repName);
+    if(!keys.length||/^daily|^weekly|^total/i.test(repName))return [];
+    const electric=number(row[total]),gasCount=number(row[gas]);
+    return [{repName,keys,aliases:nameAliases(repName),current:electric*40+gasCount*18,electric,gas:gasCount,partials:0,production:electric*40+gasCount*18,lastWeek:previous>=0?weeklyElectric(row[previous]):null,twoWeeksAgo:two>=0?weeklyElectric(row[two]):null,overall:electric*40+gasCount*18,sourceFile:fileName}];
+  });
+}
+
 export function getProductionLogRecords() {
   if (!fs.existsSync(productionDir)) return [];
-  // Stores intentionally use TSV production logs only. Do not fall back to
-  // CSV files, WorkMyT data, or stored app performance.
-  const files = fs.readdirSync(productionDir).filter((name) => name.toLowerCase().endsWith(".tsv")).sort();
-  return files.flatMap((fileName) => {
-    const rows = parseDelimited(fs.readFileSync(path.join(productionDir, fileName), "utf8").replace(/^\uFEFF/, ""), "\t");
-    return rows.some((row) => String(row[0] || "").trim().toLowerCase() === "rep name")
-      ? parseAiLog(rows, fileName)
-      : parseStandardLog(rows, fileName);
+  const files = fs.readdirSync(productionDir).filter(name=>name.toLowerCase().endsWith('.tsv')).sort();
+  return files.flatMap(fileName=>{
+    const rows=parseDelimited(fs.readFileSync(path.join(productionDir,fileName),'utf8').replace(/^\uFEFF/,''),'\t');
+    const records=rows.some(row=>String(row[0]||'').trim().toLowerCase()==='rep name')
+      ?parseAiLog(rows,fileName):rows.some(row=>row.some(value=>/^T Ele$/i.test(String(value||'').trim())))
+      ?parseNoctisLog(rows,fileName):parseStandardLog(rows,fileName);
+    const dates=dailyDates(rows,fileName);
+    return records.map(record=>{
+      const source=rows.find(row=>nameKeys(row[0]).some(k=>record.keys.includes(k)));
+      const now = new Date();
+      const today = new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).format(now);
+      const oldest = new Date(`${today}T12:00:00Z`); oldest.setUTCDate(oldest.getUTCDate()-13);
+      const min = oldest.toISOString().slice(0,10);
+      return {...record,days:(source?dailyForRep(source,dates):[]).filter(day=>day.date>=min&&day.date<=today),lastDay:null};
+    }).map(record=>({...record,lastDay:record.days[0]||null}));
   });
 }
 
 export function attachProductionLogs(agents = []) {
-  const records = getProductionLogRecords();
-  const byName = new Map();
-  const aliasBuckets = new Map();
-  for (const record of records) for (const key of record.keys) {
-    const existing = byName.get(key);
-    if (!existing || record.overall > existing.overall) byName.set(key, record);
+  const records=getProductionLogRecords();
+  const byName=new Map(),aliasBuckets=new Map();
+  for(const record of records) {
+    for(const key of record.keys) {
+      if(!byName.has(key))byName.set(key,[]);
+      byName.get(key).push(record);
+    }
+    for(const alias of record.aliases||[]) {
+      if(!aliasBuckets.has(alias))aliasBuckets.set(alias,[]);
+      aliasBuckets.get(alias).push(record);
+    }
   }
-  for (const record of records) for (const alias of record.aliases || []) {
-    if (!aliasBuckets.has(alias)) aliasBuckets.set(alias, []);
-    aliasBuckets.get(alias).push(record);
-  }
-  const uniqueAliases = new Map([...aliasBuckets].filter(([,matches]) => new Set(matches.flatMap(record => record.keys)).size === 1).map(([alias,matches]) => [alias,matches[0]]));
-  return agents.map((agent) => {
-    const record = nameKeys(agent.repName).map((key) => byName.get(key)).find(Boolean) || nameAliases(agent.repName).map((key) => uniqueAliases.get(key)).find(Boolean);
-    return { ...agent, productionLog: record ? {
-      current: record.current,
-      electric: record.electric,
-      gas: record.gas,
-      production: record.production,
-      lastWeek: record.lastWeek,
-      twoWeeksAgo: record.twoWeeksAgo,
-      overall: record.overall,
-      partials: record.partials,
-      sourceFile: record.sourceFile,
-    } : { current: 0, electric: 0, gas: 0, production: 0, lastWeek: null, twoWeeksAgo: null, overall: 0, partials: 0, sourceFile: "" } };
+  const aliases=new Map([...aliasBuckets].filter(([,matches])=>new Set(matches.flatMap(record=>record.keys)).size===1));
+  return agents.map(agent=>{
+    const keys=nameKeys(agent.repName);
+    const matches=keys.flatMap(key=>byName.get(key)||[]);
+    const found=matches.length?matches:nameAliases(agent.repName).flatMap(alias=>aliases.get(alias)||[]);
+    const unique=[...new Set(found)];
+    const lastDay=unique.flatMap(record=>record.days||[]).sort((a,b)=>b.date.localeCompare(a.date))[0]||null;
+    const latest=unique.sort((a,b)=>String(b.lastDay?.date||'').localeCompare(String(a.lastDay?.date||'')))[0];
+    return {...agent,productionLog:{
+      current:lastDay?.production??0,
+      electric:lastDay?.electric??0,
+      gas:lastDay?.gas??0,
+      partials:lastDay?.partials??0,
+      production:lastDay?.production??0,
+      lastWorkedDate:lastDay?.date||'',
+      lastDay:lastDay||null,
+      lastWeek:latest?.lastWeek??null,
+      twoWeeksAgo:latest?.twoWeeksAgo??null,
+      overall:lastDay?.production??0,
+      sourceFile:latest?.sourceFile||''
+    }};
   });
 }
 
@@ -157,7 +238,7 @@ export function getProductionRepDirectory() {
     const key = record.keys.find(Boolean);
     if (!key) continue;
     const previous = byKey.get(key);
-    if (!previous || record.production > previous.production) byKey.set(key, record);
+    if (!previous || String(record.lastDay?.date||"") > String(previous.lastDay?.date||"")) byKey.set(key, record);
   }
   return [...byKey.values()].map(record => ({ repName: record.repName, productionLog: record, sourceFile: record.sourceFile })).sort((a,b) => a.repName.localeCompare(b.repName));
 }

@@ -497,8 +497,25 @@ app.get("/api/training-watch", requireAdmin, async (req, res, next) => {
 
 app.get("/api/production-reps", (_req, res) => res.json({ reps: getProductionRepDirectory() }));
 
+// Rehydrate saved teams from the latest dated TSV workday on every read.
+// Saved work-group snapshots can otherwise keep last week's production forever.
+async function getLiveWorkMatchups() {
+  const [saved, agents] = await Promise.all([getWorkMatchups(), getAgents()]);
+  const live = attachProductionLogs(agents);
+  const byKey = new Map(live.map(rep => [String(rep.repKey), rep]));
+  const groups = (saved.groups || []).map(group => ({
+    ...group,
+    members: (group.members || []).map(member => {
+      const fresh = byKey.get(String(member.repKey));
+      if (!fresh) return { ...member, production: 0, productionLog: null };
+      return { ...member, productionLog: fresh.productionLog, production: fresh.productionLog?.production ?? 0 };
+    }),
+  }));
+  return { ...saved, groups };
+}
+
 app.get("/api/work-matchups", async (_req, res, next) => {
-  try { res.json(await getWorkMatchups()); } catch (error) { next(error); }
+  try { res.json(await getLiveWorkMatchups()); } catch (error) { next(error); }
 });
 
 app.post("/api/work-matchups", requireAdmin, async (req, res, next) => {
@@ -538,7 +555,7 @@ app.post("/api/store-matchups", requireAdmin, async (req, res, next) => {
     const date = String(req.body.date || easternDateParts().date);
     const groups = Array.isArray(req.body.groups) ? req.body.groups : [];
     // Never accept store-side edits to work-team membership; only team IDs / placement.
-    const work = await getWorkMatchups();
+    const work = await getLiveWorkMatchups();
     const teamById = new Map((work.groups || []).map(team => [String(team.id), team]));
     const claimed = new Set();
     const canonicalStores = groups.map(store => {

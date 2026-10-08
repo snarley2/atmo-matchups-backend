@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { officeRecordKey } from "../offices.mjs";
+import { officeRecordKey, canonicalOffice } from "../offices.mjs";
 
 const TRAINER_TYPES = new Set(["trainer", "manager"]);
 const BLOCKED_REP_TYPES = new Set(["trainer", "manager", "absent"]);
@@ -129,23 +129,28 @@ function periodDetails(row = {}) {
 }
 
 export function combineAgentsAndGaps(agents, gaps, performance = {}) {
-  const rowOffice = (row) => clean(pick(row, ["Office", "office", "Campaign", "campaign"]));
-  const rowKey = (row) => {
-    const name = rowName(row);
-    const office = rowOffice(row);
-    return office ? officeRecordKey(name, office) : name;
+  const rowOffice = row => clean(pick(row, ["Office", "Campaign", "office", "campaign"]));
+  const canonicalName = value => {
+    let name = clean(value).replace(/\s*\((?:PL|L|Owner|Trainer|Manager|Rep)\)\s*$/i, "");
+    if(name.includes(",")) { const [last,...first]=name.split(","); name=`${first.join(" ")} ${last}`; }
+    return name.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, "");
   };
-  const agentKey = (agent) => officeRecordKey(agent.repName, agent.office);
-  const lookup = (map, agent) => map?.get(agentKey(agent)) || map?.get(lower(agent.repName));
+  const rowKey = row => {
+    const name = canonicalName(pick(row, ["Rep Name", "repName", "Name", "Agent Name", "Agent"]));
+    const office = rowOffice(row);
+    return office ? `${canonicalOffice(office)}|${name}` : name;
+  };
+  const agentKey = agent => `${canonicalOffice(agent.office)}|${canonicalName(agent.repName)}`;
+  const lookup = (map, agent) => map?.get(agentKey(agent)) || map?.get(canonicalName(agent.repName));
   const gapMap = new Map();
   for (const gap of gaps) {
-    const name = rowName(gap);
-    if (name) gapMap.set(rowKey(gap), gap);
+    const name = rowKey(gap);
+    if (name) gapMap.set(name, gap);
   }
   const historyRows = Array.isArray(performance.lastWorkedHistory) ? performance.lastWorkedHistory : [];
-  const maps = Object.fromEntries(Object.entries(performance).filter(([period]) => period !== "lastWorkedHistory").map(([period, rows]) => [period, new Map((rows || []).map((row) => [rowKey(row), row]))]));
+  const maps = Object.fromEntries(Object.entries(performance).filter(([period]) => period !== "lastWorkedHistory").map(([period, rows]) => [period, new Map((rows || []).filter(row=>rowKey(row)).map((row) => [rowKey(row), row]))]));
   return agents.map((agent) => {
-    const name = lower(agent.repName);
+    const name = canonicalName(agent.repName);
     return {
       ...agent,
       stats: gapMap.get(agentKey(agent)) || gapMap.get(name) || {},
@@ -157,7 +162,7 @@ export function combineAgentsAndGaps(agents, gaps, performance = {}) {
         threeWeeksAgo: periodDetails(lookup(maps.threeWeeksAgo, agent)),
       },
       performanceHistory: historyRows
-        .filter((row) => rowKey(row) === agentKey(agent) || (!rowOffice(row) && rowName(row) === name))
+        .filter((row) => rowKey(row) === agentKey(agent) || (!rowOffice(row) && rowKey(row) === name))
         .map((row) => ({ snapshotDate: normalizeRecordedDate(pick(row, ["Snapshot Date"])), ...periodDetails(row) }))
         .filter((item) => item.recordedDate)
         .sort((a, b) => String(b.recordedDate).localeCompare(String(a.recordedDate))),

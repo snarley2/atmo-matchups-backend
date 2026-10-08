@@ -2,20 +2,17 @@ export const DEFAULT_OFFICE = "MADHAV MEHTA";
 
 export const OFFICES = [
   { id: "madhav-mehta", name: "MADHAV MEHTA", label: "Madhav Mehta" },
-  //{ id: "canyon-tuman", name: "CANYON TUMAN", label: "Canyon Tuman" },
- // { id: "collin-wilhelm", name: "COLLIN WILHELM", label: "Collin Willhelm" },
- // { id: "keasel-broome", name: "KEASEL BROOME", label: "Keasel Broom" },
+  { id: "canyon-tuman", name: "CANYON TUMAN", label: "Canyon Tuman" },
+  { id: "collin-wilhelm", name: "COLLIN WILLHELM", label: "Collin Wilhelm" },
+  { id: "keasel-broome", name: "KEASEL BROOM", label: "Keasel Broome" },
 ];
 
-// WorkMyT currently contains two separate options with the same KEASEL BROOM
-// label. Both are collected and merged into the one Keasel Broom office shown
-// in the app.
 export const WORKMYT_CAMPAIGN_TARGETS = [
   { office: "MADHAV MEHTA", campaign: "MADHAV MEHTA", occurrence: 0 },
- // { office: "CANYON TUMAN", campaign: "CANYON TUMAN", occurrence: 0 },
- // { office: "COLLIN WILHELM", campaign: "COLLIN WILHELM", occurrence: 0 },
- // { office: "KEASEL BROOME", campaign: "KEASEL BROOME", occurrence: 0 },
-  //{ office: "KEASEL BROOME", campaign: "KEASEL BROOME", occurrence: 1 },
+  { office: "CANYON TUMAN", campaign: "CANYON TUMAN", occurrence: 0 },
+  { office: "COLLIN WILLHELM", campaign: "COLLIN WILHELM", occurrence: 0 },
+  { office: "KEASEL BROOM", campaign: "KEASEL BROOM", occurrence: 0 },
+  { office: "KEASEL BROOM", campaign: "KEASEL BROOM", occurrence: 1 },
 ];
 
 export function normalizeOffice(value) {
@@ -26,7 +23,9 @@ export function normalizeOffice(value) {
 }
 
 export function canonicalOffice(value) {
-  const normalized = normalizeOffice(value);
+  let normalized = normalizeOffice(value);
+  if (normalized === "COLLIN WILHELM") normalized = "COLLIN WILLHELM";
+  if (normalized === "KEASEL BROOME") normalized = "KEASEL BROOM";
   return OFFICES.find((office) => office.name === normalized)?.name || DEFAULT_OFFICE;
 }
 

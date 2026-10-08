@@ -1397,6 +1397,7 @@ async function collectAndWriteWeeklyPeriods(page) {
     .reduce((sum, value) => sum + (Number(value) || 0), 0);
 
   for (const target of WORKMYT_CAMPAIGN_TARGETS) {
+    try {
     console.log(`\n[weekly office] ${target.office} · WorkMyT match ${target.occurrence + 1}`);
     await selectWeekView(page);
     await selectCampaign(page, target.campaign, target.occurrence);
@@ -1425,6 +1426,10 @@ async function collectAndWriteWeeklyPeriods(page) {
 
       console.log(`[weekly] ${target.office} ${period.label} rows=${weeklyOutput.reps.length}`);
     }
+    } catch (error) {
+      console.error(`[weekly office] ${target.office} occurrence ${target.occurrence + 1} failed: ${error?.message || error}`);
+      // Preserve other offices' results; never abandon the entire weekly run.
+    }
   }
 
   const outputs = {};
@@ -1435,8 +1440,12 @@ async function collectAndWriteWeeklyPeriods(page) {
       weekLabel: bucket.weekLabel,
       reps: [...bucket.repsByKey.values()].sort((a, b) => a.office.localeCompare(b.office) || a.repName.localeCompare(b.repName)),
     };
-    await writeWeeklyOutputToGoogleSheet(weeklyOutput, period.sheetTab);
-    console.log(`[weekly] wrote ${weeklyOutput.reps.length} combined rows to ${period.sheetTab}`);
+    if (weeklyOutput.reps.length) {
+      await writeWeeklyOutputToGoogleSheet(weeklyOutput, period.sheetTab);
+      console.log(`[weekly] wrote ${weeklyOutput.reps.length} combined rows to ${period.sheetTab}`);
+    } else {
+      console.warn(`[weekly] No rows for ${period.sheetTab}; leaving existing sheet untouched.`);
+    }
     outputs[period.key] = weeklyOutput;
   }
 

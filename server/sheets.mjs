@@ -580,10 +580,10 @@ function easternYmd(date = new Date()) {
 }
 function ymdDate(ymd) { return new Date(`${ymd}T12:00:00-04:00`); }
 function addDaysYmd(ymd, days) { const d = ymdDate(ymd); d.setUTCDate(d.getUTCDate() + days); return easternYmd(d); }
-function saturdayWeekStart(ymd) {
+function sundayWeekStart(ymd) {
   const d = ymdDate(ymd);
   const day = d.getUTCDay();
-  const back = (day - 6 + 7) % 7;
+  const back = day;
   return addDaysYmd(ymd, -back);
 }
 function manualRow(entry, officeByRepKey = new Map()) {
@@ -665,7 +665,7 @@ export async function getPerformanceTabs() {
     threeWeeksAgo: rowsToObjects(threeWeeksAgo),
   };
   const today = easternYmd();
-  const currentStart = saturdayWeekStart(today);
+  const currentStart = sundayWeekStart(today);
   const currentEnd = addDaysYmd(currentStart, 6);
   const lastStart = addDaysYmd(currentStart, -7);
   const lastEnd = addDaysYmd(currentStart, -1);
@@ -837,7 +837,7 @@ export function buildNumbersTracking(agents, currentRows, historyRows, manualEnt
     });
   }
 
-  const currentStart = saturdayWeekStart(today);
+  const currentStart = sundayWeekStart(today);
   const currentEnd = addDaysYmd(currentStart, 6);
   const records = [...byRepDate.values()];
 
