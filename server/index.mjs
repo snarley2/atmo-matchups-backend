@@ -359,6 +359,18 @@ app.post("/api/auth/admin", async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+// Login choices are independent of the currently selected office.
+// Only persistent Agents sheet roles can grant admin access.
+app.get("/api/auth/admin/candidates", async (_req, res, next) => {
+  try {
+    const agents = await getAgents();
+    res.json({ agents: agents.filter(agent => isAdminRole(agent.repType))
+      .map(agent => ({ repKey: agent.repKey, repName: agent.repName,
+        repType: agent.repType, office: agent.office }))
+      .sort((a, b) => a.repName.localeCompare(b.repName)) });
+  } catch (error) { next(error); }
+});
+
 app.get("/api/auth/admin/me", requireAdmin, async (req, res) => {
   res.json({ user: { repKey: req.admin.repKey, repName: req.admin.repName, repType: req.admin.role } });
 });
@@ -375,6 +387,34 @@ app.post("/api/production-reps/import", requireAdmin, async (_req,res,next)=>{
     res.json({added,total:combined.length});
   } catch(error){next(error)}
 });
+// Coaching's weekly training list: previous-week electric, not WorkMyT
+// last-day activity. Keep missing previous-week totals distinct from zero.
+app.get("/api/training-watch", requireAdmin, async (req, res, next) => {
+  try {
+    const threshold = Math.max(0, Number(req.query.threshold ?? 20) || 0);
+    const mode = String(req.query.mode || "both").toLowerCase();
+    const [agents, gaps, performance] = await Promise.all([
+      getAgents(), getGaps(), getPerformanceTabs()
+    ]);
+    const merged = combineAgentsAndGaps(
+      attachProductionLogs(expandAgentsFromProduction(agents)), gaps, performance
+    );
+    const reps = merged.filter(agent => {
+      const role = String(agent.repType || "").trim().toLowerCase();
+      const newRep = role === "new rep" || role === "new" || role === "trainee";
+      const leader = role === "leader" || role === "team leader";
+      return mode === "new" ? newRep : mode === "leaders" ? leader : (newRep || leader);
+    }).map(agent => ({
+      repKey: agent.repKey, repName: agent.repName, office: agent.office,
+      role: agent.repType, previousWeek: agent.productionLog?.lastWeek ?? null,
+      focus: agent.stats?.["Biggest Gap Stage"] || agent.stats?.["Biggest Gap"] ||
+        agent.stats?.biggestGap || agent.stats?.Gap || "Review funnel gaps",
+    })).filter(rep => rep.previousWeek !== null &&
+      Number.isFinite(Number(rep.previousWeek)) && Number(rep.previousWeek) < threshold);
+    res.json({ threshold, mode, reps });
+  } catch (error) { next(error); }
+});
+
 app.get("/api/work-reps", async (_req, res, next) => {
   try { res.json({reps: attachProductionLogs(expandAgentsFromProduction(await getAgents()))}); }
   catch (error) { next(error); }
