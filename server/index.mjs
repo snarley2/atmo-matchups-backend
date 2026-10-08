@@ -7,7 +7,7 @@ import crypto from "node:crypto";
 import cron from "node-cron";
 import { getAgents, replaceAgents, getGaps, getPerformanceTabs, saveMatchups, getDraftMatchups, saveDraftMatchups, getFinalMatchups, saveStoreMatchups, getStoreMatchups, saveWorkMatchups, getWorkMatchups, getFieldNotes, addFieldNote, getManualNumbers, upsertManualNumbers, getSuggestions, addSuggestion, getNumbersTracking } from "./sheets.mjs";
 import { combineAgentsAndGaps, generateGroups, generateStoreGroups, generateWorkGroups, STORE_CATALOG } from "./logic.mjs";
-import { attachProductionLogs, getProductionRepDirectory } from "./production-csv.mjs";
+import { attachProductionLogs, expandAgentsFromProduction, productionRepDirectory } from "./production-csv.mjs";
 import { runDailyAutomation, isDailyAutomationRunning } from "../run.mjs";
 import { DEFAULT_OFFICE, OFFICES, canonicalOffice } from "../offices.mjs";
 
@@ -294,7 +294,7 @@ async function buildBootstrap(office = DEFAULT_OFFICE) {
     throw new Error('Agents sheet returned 0 agents');
   }
 
-  const agents = agentsForOffice(allAgents, selectedOffice);
+  const agents = agentsForOffice(expandAgentsFromProduction(allAgents), selectedOffice);
 
   return {
     agents: combineAgentsAndGaps(attachProductionLogs(agents), gaps, performance),
@@ -361,6 +361,23 @@ app.post("/api/auth/admin", async (req, res, next) => {
 
 app.get("/api/auth/admin/me", requireAdmin, async (req, res) => {
   res.json({ user: { repKey: req.admin.repKey, repName: req.admin.repName, repType: req.admin.role } });
+});
+
+app.get("/api/production-reps", async (_req, res) => {
+  res.json({ reps: productionRepDirectory() });
+});
+app.post("/api/production-reps/import", requireAdmin, async (_req,res,next)=>{
+  try {
+    const current=await getAgents();
+    const combined=expandAgentsFromProduction(current);
+    const added=combined.length-current.length;
+    if(added) await replaceAgents(combined);
+    res.json({added,total:combined.length});
+  } catch(error){next(error)}
+});
+app.get("/api/work-reps", async (_req, res, next) => {
+  try { res.json({reps: attachProductionLogs(expandAgentsFromProduction(await getAgents()))}); }
+  catch (error) { next(error); }
 });
 
 app.get("/api/agents", async (req, res, next) => {
@@ -462,7 +479,7 @@ app.post("/api/matchups", requireAdmin, async (req, res, next) => {
 app.post("/api/store-matchups/generate", requireAdmin, async (_req, res, next) => {
   try {
     const [agents, gaps, performance] = await Promise.all([getAgents(), getGaps(), getPerformanceTabs()]);
-    const combined = combineAgentsAndGaps(attachProductionLogs(agentsForOffice(agents, DEFAULT_OFFICE)), gaps, performance);
+    const combined = combineAgentsAndGaps(attachProductionLogs(expandAgentsFromProduction(agents)), gaps, performance);
     res.json({ groups: generateStoreGroups(combined) });
   } catch (error) { next(error); }
 });
@@ -470,52 +487,13 @@ app.post("/api/store-matchups/generate", requireAdmin, async (_req, res, next) =
 app.post("/api/work-matchups/generate", requireAdmin, async (_req, res, next) => {
   try {
     const [agents, gaps, performance] = await Promise.all([getAgents(), getGaps(), getPerformanceTabs()]);
-    const combined = combineAgentsAndGaps(attachProductionLogs(agentsForOffice(agents, DEFAULT_OFFICE)), gaps, performance);
+    const combined = combineAgentsAndGaps(attachProductionLogs(expandAgentsFromProduction(agents)), gaps, performance);
     res.json({ groups: generateWorkGroups(combined) });
   } catch (error) { next(error); }
 });
 
-app.get("/api/training-watch", requireAdmin, async (req, res, next) => {
-  try {
-    const threshold = Math.max(0, Number(req.query.threshold ?? 20) || 0);
-    const mode = String(req.query.mode || "both").toLowerCase();
-    const [agents, gaps, performance] = await Promise.all([getAgents(), getGaps(), getPerformanceTabs()]);
-    const merged = combineAgentsAndGaps(attachProductionLogs(agents), gaps, performance);
-    const reps = merged.filter(agent => {
-      const role = String(agent.repType || "").toLowerCase();
-      return (mode === "both" && ["new rep", "leader"].includes(role)) ||
-        (mode === "new" && role === "new rep") || (mode === "leaders" && role === "leader");
-    }).map(agent => ({
-      repKey: agent.repKey, repName: agent.repName, office: agent.office, role: agent.repType,
-      previousWeek: agent.productionLog?.lastWeek ?? null,
-      sourceFile: agent.productionLog?.sourceFile || "",
-      focus: agent.stats?.["Biggest Gap"] || agent.stats?.biggestGap || agent.stats?.Gap || "Review funnel gaps",
-    })).filter(rep => rep.previousWeek !== null && rep.previousWeek < threshold);
-    res.json({ threshold, mode, reps });
-  } catch (error) { next(error); }
-});
-
-app.get("/api/production-reps", (_req, res) => res.json({ reps: getProductionRepDirectory() }));
-
-// Rehydrate saved teams from the latest dated TSV workday on every read.
-// Saved work-group snapshots can otherwise keep last week's production forever.
-async function getLiveWorkMatchups() {
-  const [saved, agents] = await Promise.all([getWorkMatchups(), getAgents()]);
-  const live = attachProductionLogs(agents);
-  const byKey = new Map(live.map(rep => [String(rep.repKey), rep]));
-  const groups = (saved.groups || []).map(group => ({
-    ...group,
-    members: (group.members || []).map(member => {
-      const fresh = byKey.get(String(member.repKey));
-      if (!fresh) return { ...member, production: 0, productionLog: null };
-      return { ...member, productionLog: fresh.productionLog, production: fresh.productionLog?.production ?? 0 };
-    }),
-  }));
-  return { ...saved, groups };
-}
-
 app.get("/api/work-matchups", async (_req, res, next) => {
-  try { res.json(await getLiveWorkMatchups()); } catch (error) { next(error); }
+  try { res.json(await getWorkMatchups()); } catch (error) { next(error); }
 });
 
 app.post("/api/work-matchups", requireAdmin, async (req, res, next) => {
@@ -523,20 +501,6 @@ app.post("/api/work-matchups", requireAdmin, async (req, res, next) => {
     const date = String(req.body.date || easternDateParts().date);
     const groups = Array.isArray(req.body.groups) ? req.body.groups : [];
     const saved = await saveWorkMatchups({ date, groups });
-    // Teams have stable IDs. Work owns membership; stores own placement.
-    const existingStores = await getStoreMatchups();
-    const previousPlacements = new Map();
-    for (const store of existingStores.groups || []) {
-      for (const id of store.teamIds || []) previousPlacements.set(String(id), String(store.id));
-    }
-    const storeGroups = (existingStores.groups || []).map(store => {
-      const placedTeams = groups.filter(team => previousPlacements.get(String(team.id)) === String(store.id));
-      const members = placedTeams.flatMap(team => team.members || []);
-      return { ...store, teamIds: placedTeams.map(team => String(team.id)), members,
-        production: members.reduce((sum, member) => sum + (Number(member.production) || 0), 0) };
-    });
-    await saveStoreMatchups({ date, groups: storeGroups });
-    io.emit("stores:state", { stores: storeGroups, actor: sanitizeLiveName(req.body.actor || "Server"), action: "synchronized teams from Work Matchups", at: new Date().toISOString() });
     io.emit("work:state", { groups, actor: sanitizeLiveName(req.body.actor || req.admin?.repName || "Server"), action: String(req.body.action || "saved the work matchup board").slice(0, 180), at: new Date().toISOString() });
     res.json(saved);
   } catch (error) { next(error); }
@@ -554,21 +518,9 @@ app.post("/api/store-matchups", requireAdmin, async (req, res, next) => {
   try {
     const date = String(req.body.date || easternDateParts().date);
     const groups = Array.isArray(req.body.groups) ? req.body.groups : [];
-    // Never accept store-side edits to work-team membership; only team IDs / placement.
-    const work = await getLiveWorkMatchups();
-    const teamById = new Map((work.groups || []).map(team => [String(team.id), team]));
-    const claimed = new Set();
-    const canonicalStores = groups.map(store => {
-      const teamIds = (store.teamIds || []).map(String).filter(id => {
-        if (!teamById.has(id) || claimed.has(id)) return false;
-        claimed.add(id); return true;
-      });
-      const members = teamIds.flatMap(id => teamById.get(id).members || []);
-      return { ...store, teamIds, members, production: members.reduce((sum, m) => sum + (Number(m.production) || 0), 0) };
-    });
-    const saved = await saveStoreMatchups({ date, groups: canonicalStores });
+    const saved = await saveStoreMatchups({ date, groups });
     io.emit("stores:state", {
-      stores: canonicalStores,
+      stores: groups,
       actor: sanitizeLiveName(req.body.actor || req.admin?.repName || "Server"),
       action: String(req.body.action || "saved the live store board").slice(0, 180),
       at: new Date().toISOString(),

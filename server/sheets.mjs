@@ -159,7 +159,6 @@ function matchupRows({ date, groups, updatedAt = new Date().toISOString() }) {
       member.repName || "",
       member.team || group.team || "",
       updatedAt,
-      JSON.stringify(group.teamIds || []),
     ]);
   });
 }
@@ -268,7 +267,7 @@ function storeMatchupRows({ date, groups, updatedAt = new Date().toISOString() }
       group.kind || "Production",
       Number(group.production) || 0,
     ];
-    if (!members.length) return [[...base, "", "", "", "", 0, updatedAt, JSON.stringify(group.teamIds || [])]];
+    if (!members.length) return [[...base, "", "", "", "", 0, updatedAt, (group.teamIds||[]).join("|")]];
     return members.map((member) => [
       ...base,
       member.repKey || "",
@@ -277,6 +276,7 @@ function storeMatchupRows({ date, groups, updatedAt = new Date().toISOString() }
       member.trainer || "",
       Number(member.production) || 0,
       updatedAt,
+      (group.teamIds||[]).join("|"),
     ]);
   });
 }
@@ -306,7 +306,7 @@ function rowsToStoreMatchups(tab = {}) {
         kind: String(row[modern ? 8 : 4] || "Production"),
         production: Number(row[modern ? 9 : 5]) || 0,
         members: [],
-        teamIds: (() => { try { const value = JSON.parse(String(row[16] || "[]")); return Array.isArray(value) ? value.map(String) : []; } catch { return []; } })(),
+        teamIds: String(row[16]||"").split("|").filter(Boolean),
       };
       byId.set(id, group);
       groups.push(group);
@@ -348,15 +348,15 @@ export async function getStoreMatchups() {
 const WORK_MATCHUP_HEADERS = [
   "Date", "Priority", "Group ID", "Group Name", "Store ID", "Store Name",
   "Group Production", "Rep Key", "Rep Name", "Role", "Team", "Team Lead",
-  "Rep Production", "Updated At",
+  "Rep Production", "Updated At", "Office", "Member Office",
 ];
 
 function workMatchupRows({ date, groups, updatedAt = new Date().toISOString() }) {
   return (groups || []).flatMap((group, index) => {
     const members = Array.isArray(group.members) ? group.members : [];
     const base = [date || "", Number(group.priority) || index + 1, group.id || `work-${index + 1}`, group.name || `Work Team ${index + 1}`, group.storeId || "", group.storeName || "", Number(group.production) || 0];
-    if (!members.length) return [[...base, "", "", "", "", "", 0, updatedAt]];
-    return members.map((member) => [...base, member.repKey || "", member.repName || "", member.repType || "", member.team || "", member.teamLead || member.trainer || "", Number(member.production) || 0, updatedAt]);
+    if (!members.length) return [[...base, "", "", "", "", "", 0, updatedAt, group.office||"", ""]];
+    return members.map((member) => [...base, member.repKey || "", member.repName || "", member.repType || "", member.team || "", member.teamLead || member.trainer || "", Number(member.production) || 0, updatedAt, group.office||member.office||"", member.office||""]);
   });
 }
 
@@ -369,10 +369,10 @@ function rowsToWorkMatchups(tab = {}) {
     const id = String(row[2] || `work-${groups.length + 1}`);
     let group = byId.get(id);
     if (!group) {
-      group = { id, priority: Number(row[1]) || groups.length + 1, name: String(row[3] || `Work Team ${groups.length + 1}`), storeId: String(row[4] || ""), storeName: String(row[5] || ""), production: Number(row[6]) || 0, members: [] };
+      group = { id, priority: Number(row[1]) || groups.length + 1, name: String(row[3] || `Work Team ${groups.length + 1}`), storeId: String(row[4] || ""), storeName: String(row[5] || ""), production: Number(row[6]) || 0, office: String(row[14]||""), members: [] };
       byId.set(id, group); groups.push(group);
     }
-    if (row[7] || row[8]) group.members.push({ repKey: String(row[7] || ""), repName: String(row[8] || ""), repType: String(row[9] || ""), team: String(row[10] || ""), teamLead: String(row[11] || ""), trainer: String(row[11] || ""), production: Number(row[12]) || 0 });
+    if (row[7] || row[8]) group.members.push({ repKey: String(row[7] || ""), repName: String(row[8] || ""), repType: String(row[9] || ""), team: String(row[10] || ""), teamLead: String(row[11] || ""), trainer: String(row[11] || ""), production: Number(row[12]) || 0, office: String(row[15] || row[14] || "") });
   }
   // The header itself records that the board has been initialized. This must
   // stay true even when a user deletes every team and the sheet has no data
@@ -580,10 +580,10 @@ function easternYmd(date = new Date()) {
 }
 function ymdDate(ymd) { return new Date(`${ymd}T12:00:00-04:00`); }
 function addDaysYmd(ymd, days) { const d = ymdDate(ymd); d.setUTCDate(d.getUTCDate() + days); return easternYmd(d); }
-function sundayWeekStart(ymd) {
+function saturdayWeekStart(ymd) {
   const d = ymdDate(ymd);
   const day = d.getUTCDay();
-  const back = day;
+  const back = (day - 6 + 7) % 7;
   return addDaysYmd(ymd, -back);
 }
 function manualRow(entry, officeByRepKey = new Map()) {
@@ -665,7 +665,7 @@ export async function getPerformanceTabs() {
     threeWeeksAgo: rowsToObjects(threeWeeksAgo),
   };
   const today = easternYmd();
-  const currentStart = sundayWeekStart(today);
+  const currentStart = saturdayWeekStart(today);
   const currentEnd = addDaysYmd(currentStart, 6);
   const lastStart = addDaysYmd(currentStart, -7);
   const lastEnd = addDaysYmd(currentStart, -1);
@@ -837,7 +837,7 @@ export function buildNumbersTracking(agents, currentRows, historyRows, manualEnt
     });
   }
 
-  const currentStart = sundayWeekStart(today);
+  const currentStart = saturdayWeekStart(today);
   const currentEnd = addDaysYmd(currentStart, 6);
   const records = [...byRepDate.values()];
 

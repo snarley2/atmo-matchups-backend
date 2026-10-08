@@ -3,14 +3,15 @@ export const DEFAULT_OFFICE = "MADHAV MEHTA";
 export const OFFICES = [
   { id: "madhav-mehta", name: "MADHAV MEHTA", label: "Madhav Mehta" },
   { id: "canyon-tuman", name: "CANYON TUMAN", label: "Canyon Tuman" },
-  { id: "collin-wilhelm", name: "COLLIN WILLHELM", label: "Collin Wilhelm" },
-  { id: "keasel-broome", name: "KEASEL BROOM", label: "Keasel Broome" },
+  { id: "collin-willhelm", name: "COLLIN WILLHELM", label: "Collin Willhelm" },
+  { id: "keasel-broom", name: "KEASEL BROOM", label: "Keasel Broom" },
 ];
 
+// The office label and the actual WorkMyT campaign label are intentionally distinct.
 export const WORKMYT_CAMPAIGN_TARGETS = [
-  { office: "MADHAV MEHTA", campaign: "MADHAV MEHTA", occurrence: 0 },
+  { office: "MADHAV MEHTA", campaign: "MADHAV MEHTA", occurrence: 1 },
   { office: "CANYON TUMAN", campaign: "CANYON TUMAN", occurrence: 0 },
-  { office: "COLLIN WILLHELM", campaign: "COLLIN WILHELM", occurrence: 0 },
+  { office: "COLLIN WILLHELM", campaign: "COLLIN WILLHELM", occurrence: 0 },
   { office: "KEASEL BROOM", campaign: "KEASEL BROOM", occurrence: 0 },
   { office: "KEASEL BROOM", campaign: "KEASEL BROOM", occurrence: 1 },
 ];
@@ -23,10 +24,9 @@ export function normalizeOffice(value) {
 }
 
 export function canonicalOffice(value) {
-  let normalized = normalizeOffice(value);
-  if (normalized === "COLLIN WILHELM") normalized = "COLLIN WILLHELM";
-  if (normalized === "KEASEL BROOME") normalized = "KEASEL BROOM";
-  return OFFICES.find((office) => office.name === normalized)?.name || DEFAULT_OFFICE;
+  const normalized = normalizeOffice(value);
+  const aliases = {"MADHAV MEHAT":"MADHAV MEHTA","COLLIN WILHELM":"COLLIN WILLHELM","KEASEL BROOME":"KEASEL BROOM"};
+  return OFFICES.find((office) => office.name === (aliases[normalized] || normalized))?.name || DEFAULT_OFFICE;
 }
 
 export function officeLabel(value) {
