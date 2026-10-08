@@ -514,18 +514,27 @@ export function generateWorkGroups(agents = []) {
     storeId: "",
     storeName: "",
     production: group.production,
+    kind: group.kind,
+    office: group.members.every(m=>m.office===group.members[0]?.office) ? (group.members[0]?.office||"") : "",
     members: group.members,
     }));
 }
 
+function mentorName(value) {
+  const raw = clean(value).replace(/\([^)]*\)/g, "").replace(/[,.'’_-]/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+  if (raw.includes(",")) return raw;
+  return raw;
+}
 function trainerNameFor(agent, trainerNames) {
-  // Store training follows the Agents sheet's Team Lead column. The older
-  // Trainer column remains readable only as a backwards-compatible fallback.
-  const teamLead = clean(agent.teamLead);
-  if (teamLead && trainerNames.has(lower(teamLead))) return teamLead;
-  const explicit = clean(agent.trainer);
-  if (explicit && trainerNames.has(lower(explicit))) return explicit;
+  for (const candidate of [agent.teamLead, agent.trainer]) {
+    const key=mentorName(candidate);
+    if(key && trainerNames.has(key)) return key;
+  }
   return "";
+}
+function isTrainingRep(agent) {
+  const role=lower(agent.repType).replace(/[_-]/g," ");
+  return role === "new rep" || role === "new" || role === "trainee" || role === "new hire" || role === "training";
 }
 
 function storeGroup(members, kind, index) {
@@ -569,13 +578,13 @@ export function generateStoreGroups(agents = []) {
   const trainers = present
     .filter((agent) => STORE_MENTOR_TYPES.has(lower(agent.repType)))
     .sort((a, b) => overallProduction(b) - overallProduction(a) || clean(a.repName).localeCompare(clean(b.repName)));
-  const trainerNames = new Set(trainers.map((agent) => lower(agent.repName)));
-  const trainerByName = new Map(trainers.map((agent) => [lower(agent.repName), agent]));
-  const newReps = present.filter((agent) => lower(agent.repType) === "new rep");
+  const trainerNames = new Set(trainers.map((agent) => mentorName(agent.repName)));
+  const trainerByName = new Map(trainers.map((agent) => [mentorName(agent.repName), agent]));
+  const newReps = present.filter(isTrainingRep);
   const traineesByTrainer = new Map();
   // Only New Reps are placed in Team Lead training stores. Other non-mentor
   // roles stay in the normal production-ranked pool.
-  const remaining = present.filter((agent) => !STORE_MENTOR_TYPES.has(lower(agent.repType)) && lower(agent.repType) !== "new rep" && lower(agent.repType) !== "absent");
+  const remaining = present.filter((agent) => !STORE_MENTOR_TYPES.has(lower(agent.repType)) && !isTrainingRep(agent) && lower(agent.repType) !== "absent");
 
   for (const rep of newReps) {
     const trainerName = trainerNameFor(rep, trainerNames);
@@ -583,7 +592,7 @@ export function generateStoreGroups(agents = []) {
       remaining.push(rep);
       continue;
     }
-    const key = lower(trainerName);
+    const key = mentorName(trainerName);
     if (!traineesByTrainer.has(key)) traineesByTrainer.set(key, []);
     traineesByTrainer.get(key).push({ ...rep, trainer: trainerByName.get(key)?.repName || trainerName });
   }
@@ -591,14 +600,14 @@ export function generateStoreGroups(agents = []) {
   const trainingStores = [];
   const usedTrainerKeys = new Set();
   for (const trainer of trainers) {
-    const key = lower(trainer.repName);
+    const key = mentorName(trainer.repName);
     const trainees = (traineesByTrainer.get(key) || [])
       .sort((a, b) => overallProduction(b) - overallProduction(a) || clean(a.repName).localeCompare(clean(b.repName)));
     if (!trainees.length) {
       remaining.push(trainer);
       continue;
     }
-    trainingStores.push([trainer, ...trainees.slice(0, 2)]);
+    trainingStores.push([trainer, ...trainees.slice(0,2)]);
     remaining.push(...trainees.slice(2));
     usedTrainerKeys.add(trainer.repKey);
   }
