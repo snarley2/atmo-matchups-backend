@@ -68,20 +68,33 @@ function fileWeekEnd(fileName) {
   const date = new Date(Date.UTC(year < 100 ? 2000 + year : year, Number(match[1])-1, Number(match[2])));
   return Number.isNaN(date.getTime()) ? null : date;
 }
+// Work/Store last worked dates come ONLY from dated production-log E/G cells.
+// An explicit 0 is a worked day; x means absent; an empty cell is unknown.
 function dailyResult(row, start, fileName) {
-  const weekEnd=fileWeekEnd(fileName);
+  const weekEnd = fileWeekEnd(fileName);
   if (!weekEnd) return null;
-  let latest=null;
-  for(let day=0;day<7;day++) {
-    const values=row.slice(start+day*3,start+day*3+3).map(x=>String(x??"").trim());
-    // A recorded zero is worked; x and empty cells are not work.
-    if (!values.some(x=>x!=="" && x.toLowerCase()!=="x" && Number.isFinite(Number(x.replace(/,/g,""))))) continue;
-    const electric=number(values[0]),gas=number(values[1]),partials=number(values[2]);
-    const date=new Date(weekEnd.getTime()-(6-day)*86400000).toISOString().slice(0,10);
-    latest={date,electric,gas,partials,production:(electric+partials)*40+gas*18};
+  let latest = null;
+  for (let day = 0; day < 7; day += 1) {
+    const values = row.slice(start + day * 3, start + day * 3 + 3)
+      .map(value => String(value ?? "").trim());
+    const [rawE = "", rawG = "", rawP = ""] = values;
+    // E or G must be explicitly recorded. Partial-only columns do not imply
+    // a worked day; neither do WorkMyT entries or weekly summary columns.
+    const isRecordedNumber = value => value !== "" &&
+      /^-?\d+(?:\.\d+)?$/.test(value.replace(/,/g, ""));
+    if (!isRecordedNumber(rawE) && !isRecordedNumber(rawG)) continue;
+    const electric = isRecordedNumber(rawE) ? number(rawE) : 0;
+    const gas = isRecordedNumber(rawG) ? number(rawG) : 0;
+    const partials = isRecordedNumber(rawP) ? number(rawP) : 0;
+    const date = new Date(weekEnd.getTime() - (6 - day) * 86400000)
+      .toISOString().slice(0, 10);
+    latest = {date, electric, gas, partials,
+      production: (electric + partials) * 40 + gas * 18,
+      source: "production-log"};
   }
   return latest;
 }
+
 function datedRecord(record, row, start, fileName) {
   const lastDay=dailyResult(row,start,fileName);
   return {...record,lastDay, electric:lastDay?.electric||0,gas:lastDay?.gas||0,partials:lastDay?.partials||0,
