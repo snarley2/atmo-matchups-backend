@@ -129,12 +129,22 @@ export async function appendMissingAgents(additions = []) {
   // Re-read immediately before the write to avoid importing known rep identities.
   const existing = await getAgents();
   const normalize = value => String(value || "").toLowerCase().replace(/\([^)]*\)/g, "").replace(/[^a-z0-9]/g, "");
-  const key = agent => `${normalize(agent.office)}|${normalize(agent.repName)}`;
-  const keys = new Set(existing.map(key));
+  const nameKeys = name => {
+    const value = String(name || "").replace(/\s*\((?:PL|L|OWNER|TRAINER)\)\s*$/i, "").trim();
+    if (!value) return [];
+    const aliases = [normalize(value)];
+    if (value.includes(",")) {
+      const [last, ...first] = value.split(",");
+      aliases.push(normalize(`${first.join(" ")} ${last}`));
+    }
+    return [...new Set(aliases.filter(Boolean))];
+  };
+  const identities = agent => nameKeys(agent.repName).map(name => `${normalize(agent.office)}|${name}`);
+  const keys = new Set(existing.flatMap(identities));
   const fresh = additions.filter(agent => {
-    const k = key(agent);
-    if (!k || keys.has(k)) return false;
-    keys.add(k); return true;
+    const aliases = identities(agent);
+    if (!aliases.length || aliases.some(k => keys.has(k))) return false;
+    aliases.forEach(k => keys.add(k)); return true;
   });
   if (!fresh.length) return 0;
   const rows = fresh.map(agent => AGENT_HEADERS.map(field => agent[field] ?? ""));

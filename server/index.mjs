@@ -369,9 +369,8 @@ app.get("/api/production-reps", async (_req, res) => {
 app.post("/api/production-reps/import", requireAdmin, async (_req, res, next) => {
   try {
     const current = await getAgents();
-    // Do not run bulk imports against a missing/damaged roster.
-    if (current.length < 6) return res.status(409).json({error:
-      "Agents roster appears incomplete. Restore the Agents tab before importing production reps."});
+    // Production imports are append-only and can run even if the roster is small.
+    // Existing roles and attendance are never imported from production logs.
     const combined = expandAgentsFromProduction(current);
     const additions = combined.slice(current.length).map(({ productionLog, ...agent }) => agent);
     const added = await appendMissingAgents(additions);
