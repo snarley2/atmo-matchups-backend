@@ -1483,52 +1483,55 @@ async function selectCampaign(page, campaignName, occurrence = 0) {
   const previousSignature = await getTableSignature(page);
 
   const result = await page.evaluate(({ wantedCampaign, wantedOccurrence }) => {
+    const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim();
+    const wanted = normalize(wantedCampaign);
     const selects = [...document.querySelectorAll("select")];
+    const available = [];
 
     for (const select of selects) {
-      const options = [...select.options].filter(
-        (candidate) =>
-          (candidate.textContent || "").trim() ===
-          wantedCampaign.trim()
+      const choices = [...select.options];
+      const exactMatches = choices.filter(option => normalize(option.textContent) === wanted);
+      const nearMatches = choices.filter(option =>
+        normalize(option.textContent).toLowerCase() === wanted.toLowerCase()
       );
-      const option = options[wantedOccurrence];
+      available.push(...nearMatches.map(option => normalize(option.textContent)));
 
+      // Prefer the requested occurrence when duplicates are identically named.
+      // WorkMyT may also have a mixed-case "Madhav Mehta" plus a single
+      // uppercase "MADHAV MEHTA". Never treat the mixed-case entry as an
+      // uppercase match or reject the single uppercase entry.
+      const option = exactMatches[wantedOccurrence] ||
+        (exactMatches.length === 1 ? exactMatches[0] : null);
       if (!option) continue;
 
-      // selectedIndex guarantees the second KEASEL BROOM row is selected even
-      // if WorkMyT gives both duplicate labels the same option value.
       select.selectedIndex = option.index;
       select.value = option.value;
-
-      select.dispatchEvent(
-        new Event("input", { bubbles: true })
-      );
-
-      select.dispatchEvent(
-        new Event("change", { bubbles: true })
-      );
+      select.dispatchEvent(new Event("input", { bubbles: true }));
+      select.dispatchEvent(new Event("change", { bubbles: true }));
 
       return {
         found: true,
-        value: option.value,
-        matchCount: options.length,
+        label: normalize(option.textContent),
+        selectedMatch: exactMatches.indexOf(option) + 1,
+        exactCount: exactMatches.length,
+        available,
       };
     }
-
-    return {
-      found: false,
-      value: "",
-    };
+    return { found: false, exactCount: 0, available };
   }, { wantedCampaign: campaignName, wantedOccurrence: occurrence });
 
   if (!result.found) {
     throw new Error(
-      `Campaign "${campaignName}" occurrence ${occurrence + 1} was not found.`
+      `Campaign "${campaignName}" could not be selected (requested match ${occurrence + 1}). ` +
+      `Case-insensitive matches visible: ${JSON.stringify(result.available)}. ` +
+      `Check the WorkMyT campaign dropdown and offices.mjs.`
     );
   }
 
   await waitForTableSettled(page, previousSignature);
-  console.log(`[filter] campaign="${campaignName}" occurrence=${occurrence + 1}`);
+  console.log(
+    `[filter] campaign="${result.label}" exact match ${result.selectedMatch}/${result.exactCount}`
+  );
 }
 
 async function selectDate(page, dateLabel) {

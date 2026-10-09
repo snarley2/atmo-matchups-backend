@@ -2,18 +2,19 @@ export const DEFAULT_OFFICE = "MADHAV MEHTA";
 
 export const OFFICES = [
   { id: "madhav-mehta", name: "MADHAV MEHTA", label: "Madhav Mehta" },
+  //
   { id: "canyon-tuman", name: "CANYON TUMAN", label: "Canyon Tuman" },
-  { id: "collin-willhelm", name: "COLLIN WILLHELM", label: "Collin Willhelm" },
-  { id: "keasel-broom", name: "KEASEL BROOM", label: "Keasel Broom" },
+  //{ id: "collin-willhelm", name: "COLLIN WILLHELM", label: "Collin Willhelm" },
+  //{ id: "keasel-broom", name: "KEASEL BROOM", label: "Keasel Broom" },
 ];
 
 // The office label and the actual WorkMyT campaign label are intentionally distinct.
 export const WORKMYT_CAMPAIGN_TARGETS = [
   { office: "MADHAV MEHTA", campaign: "MADHAV MEHTA", occurrence: 1 },
-  { office: "CANYON TUMAN", campaign: "CANYON TUMAN", occurrence: 0 },
-  { office: "COLLIN WILLHELM", campaign: "COLLIN WILLHELM", occurrence: 0 },
-  { office: "KEASEL BROOM", campaign: "KEASEL BROOM", occurrence: 0 },
-  { office: "KEASEL BROOM", campaign: "KEASEL BROOM", occurrence: 1 },
+  //{ office: "CANYON TUMAN", campaign: "CANYON TUMAN", occurrence: 0 },
+  //{ office: "COLLIN WILLHELM", campaign: "COLLIN WILLHELM", occurrence: 0 },
+  //{ office: "KEASEL BROOM", campaign: "KEASEL BROOM", occurrence: 0 },
+  //{ office: "KEASEL BROOM", campaign: "KEASEL BROOM", occurrence: 1 },
 ];
 
 export function normalizeOffice(value) {

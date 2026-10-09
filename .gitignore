@@ -25,3 +25,17 @@ chrome-profile/
 .DS_Store
 Thumbs.db
 .vscode/
+
+google-service-account.json
+
+.env
+
+.env.*
+
+.chrome-profile/
+.env
+.env.*
+!.env.example
+google-service-account.json
+.chrome-profile/
+node_modules/

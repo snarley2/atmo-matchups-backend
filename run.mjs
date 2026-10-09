@@ -98,9 +98,11 @@ export async function runDailyAutomation() {
 
     // 2. Read Last Worked DIRECTLY from Google Sheets and append new reps to Agents.
     //    No agents.json file is used by this step.
-    await runNodeScriptUntilSuccess("write-agents-to-sheet.mjs", {
-      retryDelayMs: 30_000,
-    });
+    if (!process.env.SUPABASE_DB_URL) {
+      await runNodeScriptUntilSuccess("write-agents-to-sheet.mjs", {retryDelayMs: 30_000});
+    } else {
+      console.log('[runner] Supabase mode: skipping unsafe Sheets Agents writer');
+    }
 
     // 3. Continue the normal automation after the Agents sheet is current.
     await runNodeScriptUntilSuccess("run-week-days-fix.mjs", {
@@ -110,6 +112,11 @@ export async function runDailyAutomation() {
     await runNodeScriptUntilSuccess("generate-team-rep-gaps.mjs", {
       retryDelayMs: 30_000,
     });
+
+    // Bridge existing WorkMyT outputs to Supabase without touching Agents.
+    if (process.env.SUPABASE_DB_URL) {
+      await runNodeScriptUntilSuccess("scripts/sync-workmyt-to-supabase.mjs", {retryDelayMs: 30_000, maxAttempts: 3});
+    }
 
     const finishedAt = new Date();
     console.log(`[runner] Daily automation finished at ${finishedAt.toISOString()}`);

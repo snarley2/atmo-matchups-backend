@@ -10,7 +10,9 @@
     "run:last-worked": "node last-day-worked.mjs",
     "generate:gaps": "node generate-team-rep-gaps.mjs",
     "generate:matchups": "node generate-matchups-with-overrides.mjs",
-    "write:agents": "node write-agents-to-sheet.mjs"
+    "write:agents": "node write-agents-to-sheet.mjs",
+    "migrate:supabase": "node scripts/migrate-google-sheets-to-supabase.mjs",
+    "sync:performance": "node scripts/sync-workmyt-to-supabase.mjs"
   },
   "dependencies": {
     "cors": "^2.8.5",
@@ -19,6 +21,7 @@
     "googleapis": "^156.0.0",
     "node-cron": "^4.2.1",
     "puppeteer": "^25.4.0",
-    "socket.io": "^4.8.3"
+    "socket.io": "^4.8.3",
+    "pg": "^8.16.3"
   }
 }

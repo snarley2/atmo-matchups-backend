@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { google } from "googleapis";
+import { supabaseSheetsClient } from "./supabase-sheets-client.mjs";
 import { DEFAULT_OFFICE, canonicalOffice, officeLabel } from "../offices.mjs";
 
 const spreadsheetId = process.env.GOOGLE_SHEET_ID;
@@ -30,24 +30,7 @@ function credentialsPath() {
 }
 
 export async function sheetsClient() {
-  if (!spreadsheetId) throw new Error("Missing GOOGLE_SHEET_ID in .env");
-  const keyFile = credentialsPath();
-  let auth;
-  if (keyFile) {
-    if (!fs.existsSync(keyFile)) throw new Error(`Google credentials not found: ${keyFile}`);
-    auth = new google.auth.GoogleAuth({ keyFile, scopes: ["https://www.googleapis.com/auth/spreadsheets"] });
-  } else if (process.env.GOOGLE_CLIENT_EMAIL && process.env.GOOGLE_PRIVATE_KEY) {
-    auth = new google.auth.GoogleAuth({
-      credentials: {
-        client_email: process.env.GOOGLE_CLIENT_EMAIL,
-        private_key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, "\n"),
-      },
-      scopes: ["https://www.googleapis.com/auth/spreadsheets"],
-    });
-  } else {
-    throw new Error("Missing Google service-account credentials");
-  }
-  return google.sheets({ version: "v4", auth });
+  return supabaseSheetsClient();
 }
 
 async function ensureTab(client, title, headers = []) {
