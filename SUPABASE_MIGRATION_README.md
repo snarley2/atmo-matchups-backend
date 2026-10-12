@@ -1,23 +1,31 @@
-# Supabase migration — application storage
+# Direct Supabase storage
 
-This package switches **the Express app's `server/sheets.mjs` storage** from Google Sheets to Supabase PostgreSQL. It keeps the same HTTP APIs and existing frontend unchanged. **The standalone WorkMyT and gap-generation runners are not yet natively migrated** (`last-day-worked.mjs`, `run-week-days-fix.mjs`, `generate-team-rep-gaps.mjs`, `generate-matchups-with-overrides.mjs`, `write-agents-to-sheet.mjs`); they still write Google Sheets. Do not shut off Google Sheets or assume weekly data is refreshed in Supabase until the runner migration is completed.
+WorkMyT collectors now write directly into Supabase PostgreSQL using the existing public.project_tabs table. Google Sheets is no longer used in daily collection, gap generation, agent discovery, or standalone matchup generation.
 
-## Setup
-1. Create a Supabase project. In Supabase **SQL Editor**, run `supabase/schema.sql`.
-2. Under Supabase database connection settings obtain the **Postgres connection string** (prefer the session pooler when on IPv4-only infrastructure). Set `SUPABASE_DB_URL` on Render and locally. Do not put this string in Vite variables or frontend code.
-3. Install backend dependencies with `npm install` (adds `pg`). The SQL table is private; its RLS is enabled with no client policies.
-4. KEEP your existing Google Sheets credentials temporarily **for one-time migration and legacy automation**.
-5. While the old app is paused for writes, run `npm run migrate:supabase`. This copies all tab rows from the existing Sheets workbook into `project_tabs`, without replacing existing Supabase tabs. To overwrite existing Supabase tab snapshots intentionally, run `npm run migrate:supabase -- --replace-existing` only with a verified backup.
-6. Confirm in Supabase SQL Editor: `select title, jsonb_array_length(rows) as rows_count from public.project_tabs order by title;`. Specifically verify the restored Agents roster, the Work/Store Matchups documents, and weekly tabs.
-7. Deploy the backend source files, set `SUPABASE_DB_URL` and restart Render. The frontend is unchanged. Do not remove Google credentials until standalone runners are also migrated.
+## Update
 
-## Important behavior
-- Changes to Attendance go into Supabase, **not** Google Sheets, after the backend switches. Old scripts that directly write Sheets will **not** update Supabase.
-- Rows are stored in a tab-compatible JSON array to preserve existing app routes and sheet structures; this is a compatibility transition, not a final relational model. Team edits and multi-user concurrency should be load tested.
-- All backend storage writes are PostgreSQL transactions. During cutover, stop concurrent app writes; otherwise edits between snapshot and restart can be lost.
-- The `project_tabs` table is not intended for browser access. Only the Express backend knows the Postgres URL.
-- The current adapter maps known Sheets operations only. Export/formatting actions outside `server/sheets.mjs` still rely on Google APIs.
-- Always keep an external backup before migration.
+1. Extract this patch into the backend project and replace the included files.
+2. Keep SUPABASE_DB_URL configured both locally and on Render. This is a server-side Postgres connection string, not SUPABASE_URL or an API key. Existing SUPABASE_DB_SSL and SUPABASE_DB_SSL_VERIFY options still apply.
+3. Keep WORKMYT_EMAIL, WORKMYT_PASSWORD and existing browser/campaign settings. Browser login and scraping behavior are unchanged.
+4. The existing public.project_tabs table must be present (supabase/schema.sql). Existing Supabase data and application APIs are preserved; no new migration or reimport is required for an already configured project.
+5. Push the changed backend files and redeploy/restart. No frontend changes are required.
+6. Run npm run run to collect Last Worked, append new Agents, collect Current Week plus the previous three weeks, and generate Team/Rep Gaps directly in Supabase.
 
-## Transitional automation bridge
-The updated `run.mjs` skips the old `write-agents-to-sheet.mjs` task when Supabase is enabled, and runs `scripts/sync-workmyt-to-supabase.mjs` after WorkMyT and gap generation. The bridge copies only seven performance/gap tabs — **never Agents, attendance, matchups, notes, or other user-managed data**. It is safe for an incremental cutover, but the Google-based gap generator may still use stale Agents data in Google Sheets. Full migration of the collector and gap generator is recommended before decommissioning Sheets.
+Existing environment variables naming tabs remain supported, including GOOGLE_SHEET_TAB. They identify Supabase data tabs; they do not initiate a Google Sheets connection. The migrated commands do not require GOOGLE_SHEET_ID, GOOGLE_SERVICE_ACCOUNT_FILE, or Google API credentials.
+
+The write-agents-to-sheet.mjs filename is retained for existing commands, but now reads Last Worked and appends only missing identities in Supabase. Existing UUIDs, attendance, roles, teams, and trainer assignments are retained.
+
+The sync:performance command is now a compatibility no-op. This prevents an old scheduled copy from overwriting direct Supabase output with old Google Sheets values. The explicit migrate:supabase import command remains available for a deliberate initial import, and still requires Google access; do not run it for routine refreshes.
+
+Production totals for Weekly Training, Work Matchups and Stores still come from the supplied TSV logs. WorkMyT performance is stored in Supabase; this patch does not replace the agreed TSV production source.
+
+Reports are published atomically, so shrinking a report removes stale rows without exposing an empty intermediate report. Last Worked history and historical-only collection keep their existing behavior.
+
+## Checks
+
+Syntax checks passed for all changed runtime files. Mocked database integration tests cover direct daily/history writes, all four weekly periods, gap generation, preserving attendance/assignments during rep discovery, and rollback on database failure. Existing training tests also pass.
+
+Run from the backend folder (Node 24):
+node --experimental-test-module-mocks --test tests/supabase-collectors.test.mjs tests/training.test.mjs
+
+A real WorkMyT browser session and live Supabase connection have not been exercised here.

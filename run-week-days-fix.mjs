@@ -1,11 +1,12 @@
 // mehta-marketing/atmomatchups/run.mjs
 import fs from "fs";
+import { fileURLToPath } from "node:url";
 import path from "path";
 import process from "process";
 import puppeteer from "puppeteer";
 import dotenv from "dotenv";
 dotenv.config();
-import { google } from "googleapis";
+import { supabaseSheetsClient, closeSupabase } from "./server/supabase-sheets-client.mjs";
 import { WORKMYT_CAMPAIGN_TARGETS, officeRecordKey } from "./offices.mjs";
 // ============================================================
 // CONFIG
@@ -27,26 +28,11 @@ const OUTPUT_JSON =
     "fieldday-performance.json"
   );
 
-const GOOGLE_SHEET_ID =
-  process.env.GOOGLE_SHEET_ID;
+const STORAGE_ID = "supabase";
 
 const GOOGLE_SHEET_TAB =
   process.env.GOOGLE_SHEET_TAB || "Last Worked";
 
-const GOOGLE_SERVICE_ACCOUNT_FILE =
-  process.env.GOOGLE_SERVICE_ACCOUNT_FILE ||
-  path.join(
-    process.cwd(),
-    "google-service-account.json"
-  );
-
-const GOOGLE_CREDENTIALS_PATH =
-  path.isAbsolute(GOOGLE_SERVICE_ACCOUNT_FILE)
-    ? GOOGLE_SERVICE_ACCOUNT_FILE
-    : path.join(
-        process.cwd(),
-        GOOGLE_SERVICE_ACCOUNT_FILE
-      );
 
 // Chrome configuration
 const CHROME_PATH =
@@ -303,18 +289,9 @@ function writeJson(filePath, data) {
   );
 }
 
-async function getGoogleSheetsClient() {
-  const auth = new google.auth.GoogleAuth({
-    keyFile: GOOGLE_CREDENTIALS_PATH,
-    scopes: [
-      "https://www.googleapis.com/auth/spreadsheets",
-    ],
-  });
-
-  return google.sheets({
-    version: "v4",
-    auth,
-  });
+async function getSupabaseClient() {
+  if (!process.env.SUPABASE_DB_URL) throw new Error("Missing SUPABASE_DB_URL: WorkMyT storage requires Supabase");
+  return supabaseSheetsClient();
 }
 
 function buildGoogleSheetRows(output) {
@@ -381,7 +358,7 @@ async function formatGoogleSheet(
 ) {
   const spreadsheet =
     await sheets.spreadsheets.get({
-      spreadsheetId: GOOGLE_SHEET_ID,
+      spreadsheetId: STORAGE_ID,
       fields: "sheets.properties",
     });
 
@@ -394,7 +371,7 @@ async function formatGoogleSheet(
 
   if (!targetSheet) {
     throw new Error(
-      `Google Sheet tab "${GOOGLE_SHEET_TAB}" was not found.`
+      `Supabase data tab "${GOOGLE_SHEET_TAB}" was not found.`
     );
   }
 
@@ -626,7 +603,7 @@ async function formatGoogleSheet(
   });
 
   await sheets.spreadsheets.batchUpdate({
-    spreadsheetId: GOOGLE_SHEET_ID,
+    spreadsheetId: STORAGE_ID,
     requestBody: {
       requests,
     },
@@ -699,7 +676,7 @@ function buildWeeklyGoogleSheetRows(weeklyOutput) {
 
 async function ensureGoogleSheetTab(sheets, tabName) {
   const spreadsheet = await sheets.spreadsheets.get({
-    spreadsheetId: GOOGLE_SHEET_ID,
+    spreadsheetId: STORAGE_ID,
     fields: "sheets.properties",
   });
 
@@ -710,7 +687,7 @@ async function ensureGoogleSheetTab(sheets, tabName) {
   if (existing) return existing.properties.sheetId;
 
   const response = await sheets.spreadsheets.batchUpdate({
-    spreadsheetId: GOOGLE_SHEET_ID,
+    spreadsheetId: STORAGE_ID,
     requestBody: {
       requests: [
         {
@@ -872,53 +849,37 @@ async function formatWeeklyGoogleSheet(
   });
 
   await sheets.spreadsheets.batchUpdate({
-    spreadsheetId: GOOGLE_SHEET_ID,
+    spreadsheetId: STORAGE_ID,
     requestBody: { requests },
   });
 }
 
-async function writeWeeklyOutputToGoogleSheet(weeklyOutput, tabName) {
-  const sheets = await getGoogleSheetsClient();
+async function writeWeeklyOutputToSupabase(weeklyOutput, tabName) {
+  const sheets = await getSupabaseClient();
   await ensureGoogleSheetTab(sheets, tabName);
 
   const values = buildWeeklyGoogleSheetRows(weeklyOutput);
 
-  await sheets.spreadsheets.values.clear({
-    spreadsheetId: GOOGLE_SHEET_ID,
-    range: `'${tabName}'!A:Z`,
-  });
-
-  await sheets.spreadsheets.values.update({
-    spreadsheetId: GOOGLE_SHEET_ID,
+  await sheets.spreadsheets.values.replace({
+    spreadsheetId: STORAGE_ID,
     range: `'${tabName}'!A1`,
     valueInputOption: "USER_ENTERED",
     requestBody: { values },
   });
 
-  await formatWeeklyGoogleSheet(
-    sheets,
-    weeklyOutput,
-    tabName,
-    values.length
-  );
 
-  console.log(`[sheet] ${tabName} updated.`);
+  console.log(`[supabase] ${tabName} updated.`);
 }
 
-async function writeOutputToGoogleSheet(output) {
+async function writeOutputToSupabase(output) {
   const sheets =
-    await getGoogleSheetsClient();
+    await getSupabaseClient();
 
   const values =
     buildGoogleSheetRows(output);
 
-  await sheets.spreadsheets.values.clear({
-    spreadsheetId: GOOGLE_SHEET_ID,
-    range: `'${GOOGLE_SHEET_TAB}'!A:Z`,
-  });
-
-  await sheets.spreadsheets.values.update({
-    spreadsheetId: GOOGLE_SHEET_ID,
+  await sheets.spreadsheets.values.replace({
+    spreadsheetId: STORAGE_ID,
     range: `'${GOOGLE_SHEET_TAB}'!A1`,
     valueInputOption: "USER_ENTERED",
     requestBody: {
@@ -926,15 +887,10 @@ async function writeOutputToGoogleSheet(output) {
     },
   });
 
-  await formatGoogleSheet(
-    sheets,
-    output,
-    values.length
-  );
 
 
   console.log(
-    "[sheet] Google Sheet updated."
+    "[supabase] Saved directly to Supabase."
   );
 }
 // ============================================================
@@ -1441,7 +1397,7 @@ async function collectAndWriteWeeklyPeriods(page) {
       reps: [...bucket.repsByKey.values()].sort((a, b) => a.office.localeCompare(b.office) || a.repName.localeCompare(b.repName)),
     };
     if (weeklyOutput.reps.length) {
-      await writeWeeklyOutputToGoogleSheet(weeklyOutput, period.sheetTab);
+      await writeWeeklyOutputToSupabase(weeklyOutput, period.sheetTab);
       console.log(`[weekly] wrote ${weeklyOutput.reps.length} combined rows to ${period.sheetTab}`);
     } else {
       console.warn(`[weekly] No rows for ${period.sheetTab}; leaving existing sheet untouched.`);
@@ -1954,14 +1910,14 @@ async function run() {
     );
 
     console.log(
-      "[done] Current week + last 3 weeks uploaded to Google Sheets"
+      "[done] Current week + last 3 weeks saved directly to Supabase"
     );
   } finally {
     await safeCleanup();
   }
 }
 
-run().catch((error) => {
-  console.error("[fatal]", error);
-  process.exit(1);
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  run().finally(closeSupabase).catch(error=>{console.error("[fatal]",error);process.exitCode=1});
+}
+export { writeWeeklyOutputToSupabase };

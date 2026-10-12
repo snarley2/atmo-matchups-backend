@@ -1,3 +1,4 @@
+import "dotenv/config";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -86,25 +87,21 @@ export async function runDailyAutomation() {
     };
   }
 
+  if (!process.env.SUPABASE_DB_URL) throw new Error("Missing SUPABASE_DB_URL: daily automation requires Supabase");
   runInProgress = true;
   const startedAt = new Date();
   console.log(`[runner] Daily automation started at ${startedAt.toISOString()}`);
 
   try {
-    // 1. Refresh the Last Worked sheet.
+    // 1. Collect WorkMyT directly into Supabase.
     await runNodeScriptUntilSuccess("last-day-worked.mjs", {
       retryDelayMs: 30_000,
     });
 
-    // 2. Read Last Worked DIRECTLY from Google Sheets and append new reps to Agents.
-    //    No agents.json file is used by this step.
-    if (!process.env.SUPABASE_DB_URL) {
-      await runNodeScriptUntilSuccess("write-agents-to-sheet.mjs", {retryDelayMs: 30_000});
-    } else {
-      console.log('[runner] Supabase mode: skipping unsafe Sheets Agents writer');
-    }
+    // Append newly discovered WorkMyT reps without changing existing Attendance.
+    await runNodeScriptUntilSuccess("write-agents-to-sheet.mjs", {retryDelayMs:30_000});
 
-    // 3. Continue the normal automation after the Agents sheet is current.
+    // Refresh weekly periods and compute gaps from Supabase data.
     await runNodeScriptUntilSuccess("run-week-days-fix.mjs", {
       retryDelayMs: 30_000,
     });
@@ -112,11 +109,6 @@ export async function runDailyAutomation() {
     await runNodeScriptUntilSuccess("generate-team-rep-gaps.mjs", {
       retryDelayMs: 30_000,
     });
-
-    // Bridge existing WorkMyT outputs to Supabase without touching Agents.
-    if (process.env.SUPABASE_DB_URL) {
-      await runNodeScriptUntilSuccess("scripts/sync-workmyt-to-supabase.mjs", {retryDelayMs: 30_000, maxAttempts: 3});
-    }
 
     const finishedAt = new Date();
     console.log(`[runner] Daily automation finished at ${finishedAt.toISOString()}`);

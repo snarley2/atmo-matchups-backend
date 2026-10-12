@@ -2,20 +2,16 @@ import fs from "fs";
 import path from "path";
 import process from "process";
 import dotenv from "dotenv";
-import { google } from "googleapis";
+import { getAgents } from "./server/sheets.mjs";
+import { supabaseSheetsClient, closeSupabase } from "./server/supabase-sheets-client.mjs";
 
 dotenv.config();
 
-const GOOGLE_SHEET_ID = process.env.GOOGLE_SHEET_ID;
+const STORAGE_ID = "supabase";
 const SOURCE_TAB = process.env.GOOGLE_SHEET_TAB || "Last Worked";
 const OUTPUT_TAB = process.env.TEAM_TRAINER_MATCHUPS_TAB || "Team Trainer Match Ups";
 const CONTROLS_TAB = process.env.MATCHUP_OVERRIDES_TAB || "Matchup Overrides";
 const AGENTS_FILE = process.env.AGENTS_FILE || path.join(process.cwd(), "atmomatchups", "outputs", "agents.json");
-const GOOGLE_SERVICE_ACCOUNT_FILE = process.env.GOOGLE_SERVICE_ACCOUNT_FILE || path.join(process.cwd(), "google-service-account.json");
-
-const CREDENTIALS_PATH = path.isAbsolute(GOOGLE_SERVICE_ACCOUNT_FILE)
-  ? GOOGLE_SERVICE_ACCOUNT_FILE
-  : path.join(process.cwd(), GOOGLE_SERVICE_ACCOUNT_FILE);
 const AGENTS_PATH = path.isAbsolute(AGENTS_FILE)
   ? AGENTS_FILE
   : path.join(process.cwd(), AGENTS_FILE);
@@ -76,35 +72,28 @@ function getHeaderIndex(headers, aliases, required = false) {
   return -1;
 }
 
-async function getSheetsClient() {
-  if (!GOOGLE_SHEET_ID) throw new Error("GOOGLE_SHEET_ID is missing from .env");
-  if (!fs.existsSync(CREDENTIALS_PATH)) {
-    throw new Error(`Google credentials file not found: ${CREDENTIALS_PATH}`);
-  }
-  const auth = new google.auth.GoogleAuth({
-    keyFile: CREDENTIALS_PATH,
-    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
-  });
-  return google.sheets({ version: "v4", auth });
+async function getSupabaseClient() {
+  if (!process.env.SUPABASE_DB_URL) throw new Error("Missing SUPABASE_DB_URL: WorkMyT storage requires Supabase");
+  return supabaseSheetsClient();
 }
 
 async function getOrCreateSheet(sheets, title, headers = null) {
   const spreadsheet = await sheets.spreadsheets.get({
-    spreadsheetId: GOOGLE_SHEET_ID,
+    spreadsheetId: STORAGE_ID,
     fields: "sheets.properties",
   });
   const existing = spreadsheet.data.sheets?.find((sheet) => sheet.properties?.title === title);
   if (existing) return existing.properties.sheetId;
 
   const result = await sheets.spreadsheets.batchUpdate({
-    spreadsheetId: GOOGLE_SHEET_ID,
+    spreadsheetId: STORAGE_ID,
     requestBody: { requests: [{ addSheet: { properties: { title } } }] },
   });
   const sheetId = result.data.replies?.[0]?.addSheet?.properties?.sheetId;
 
   if (headers?.length) {
     await sheets.spreadsheets.values.update({
-      spreadsheetId: GOOGLE_SHEET_ID,
+      spreadsheetId: STORAGE_ID,
       range: `'${title}'!A1`,
       valueInputOption: "RAW",
       requestBody: { values: [headers] },
@@ -116,7 +105,7 @@ async function getOrCreateSheet(sheets, title, headers = null) {
 async function readTab(sheets, title) {
   try {
     const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: GOOGLE_SHEET_ID,
+      spreadsheetId: STORAGE_ID,
       range: `'${title}'!A:AZ`,
       valueRenderOption: "UNFORMATTED_VALUE",
     });
@@ -128,10 +117,8 @@ async function readTab(sheets, title) {
   }
 }
 
-function loadAgents() {
-  if (!fs.existsSync(AGENTS_PATH)) throw new Error(`Agents file not found: ${AGENTS_PATH}`);
-  const parsed = JSON.parse(fs.readFileSync(AGENTS_PATH, "utf8"));
-  if (!Array.isArray(parsed)) throw new Error("agents.json must contain an array");
+async function loadAgents() {
+  const parsed = await getAgents();
   const excludedTypes = new Set(["absent", "trainer", "manager"]);
   const eligibleAgents = parsed.filter(
     (agent) => !excludedTypes.has(normalizeText(agent.repType).toLowerCase())
@@ -648,13 +635,13 @@ async function formatOutput(sheets, sheetId, groups, rows) {
   }
 
   await sheets.spreadsheets.batchUpdate({
-    spreadsheetId: GOOGLE_SHEET_ID,
+    spreadsheetId: STORAGE_ID,
     requestBody: { requests },
   });
 }
 
 async function run() {
-  const sheets = await getSheetsClient();
+  const sheets = await getSupabaseClient();
   await getOrCreateSheet(sheets, CONTROLS_TAB, [
     "Timestamp", "Rep Name", "Team", "Trainer", "Coaching Focus", "Enabled", "Coach Notes",
   ]);
@@ -664,29 +651,27 @@ async function run() {
     readTab(sheets, CONTROLS_TAB),
   ]);
 
-  const reps = buildReps(loadAgents(), parseSource(sourceTab), parseControls(controlsTab));
+  const reps = buildReps(await loadAgents(), parseSource(sourceTab), parseControls(controlsTab));
   const groups = buildGroups(reps);
   const rows = buildRows(groups);
   const outputSheetId = await getOrCreateSheet(sheets, OUTPUT_TAB);
 
-  await sheets.spreadsheets.values.clear({ spreadsheetId: GOOGLE_SHEET_ID, range: `'${OUTPUT_TAB}'!A:AZ` });
-  await sheets.spreadsheets.values.update({
-    spreadsheetId: GOOGLE_SHEET_ID,
+  await sheets.spreadsheets.values.replace({
+    spreadsheetId: STORAGE_ID,
     range: `'${OUTPUT_TAB}'!A1`,
     valueInputOption: "USER_ENTERED",
     requestBody: { values: rows },
   });
-  await formatOutput(sheets, outputSheetId, groups, rows);
 
   console.log(`[team-trainer-matchups] reps=${reps.length}`);
   console.log(`[team-trainer-matchups] groups=${groups.length}`);
   console.log(`[team-trainer-matchups] duplicate reps removed; trainers/managers/absent agents excluded from rep slots`);
   console.log(`[team-trainer-matchups] overrides="${CONTROLS_TAB}"`);
   console.log(`[team-trainer-matchups] output="${OUTPUT_TAB}"`);
-  console.log(`[team-trainer-matchups] https://docs.google.com/spreadsheets/d/${GOOGLE_SHEET_ID}`);
+  console.log("[team-trainer-matchups] Saved directly to Supabase");
 }
 
-run().catch((error) => {
+run().finally(closeSupabase).catch((error) => {
   console.error("[fatal]", error);
   process.exit(1);
 });

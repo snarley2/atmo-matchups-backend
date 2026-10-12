@@ -25,6 +25,7 @@ async function transaction(fn) {
   catch(e){await c.query('ROLLBACK');throw e;} finally{c.release();}
 }
 async function get(c,title,locked=false){
+ if(locked) await c.query('SELECT pg_advisory_xact_lock(hashtext($1))',[title]);
  const result=await c.query('SELECT rows FROM public.project_tabs WHERE title=$1'+(locked?' FOR UPDATE':''),[title]);
  return result.rowCount?clone(result.rows[0].rows):null;
 }
@@ -41,6 +42,18 @@ const rowsUpdate = async ({range,requestBody}) => {
   const rows=await get(c,r.title,true)||[];
   for(let i=0;i<incoming.length;i++) {const index=r.row+i;while(rows.length<=index)rows.push([]);for(let j=0;j<incoming[i].length;j++)rows[index][r.col+j]=incoming[i][j]??'';}
   await put(c,r.title,rows);return {data:{updatedRows:incoming.length}};
+ });
+};
+// Collectors publish complete snapshots in one transaction. Readers see either
+// the old complete snapshot or the new one, including when a report shrinks.
+const rowsReplace = async ({range,requestBody}) => {
+ const r=parse(range);
+ if(r.row!==0 || r.col!==0) throw new Error('Snapshot replacement must start at A1');
+ return transaction(async c=>{
+  await get(c,r.title,true);
+  const rows=clone(requestBody?.values||[]);
+  await put(c,r.title,rows);
+  return {data:{updatedRows:rows.length}};
  });
 };
 const rowsAppend=async ({range,requestBody}) => {
@@ -70,5 +83,5 @@ async function batch({requestBody}) {
   return {data:{replies}};
  });
 }
-export function supabaseSheetsClient(){return {spreadsheets:{get:meta,batchUpdate:batch,values:{get:rowsGet,update:rowsUpdate,append:rowsAppend,clear:rowsClear}}};}
+export function supabaseSheetsClient(){return {spreadsheets:{get:meta,batchUpdate:batch,values:{get:rowsGet,update:rowsUpdate,replace:rowsReplace,append:rowsAppend,clear:rowsClear}}};}
 export async function closeSupabase(){if(pool){await pool.end();pool=undefined;}}

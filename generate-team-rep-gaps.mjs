@@ -1,25 +1,19 @@
 import fs from "fs";
+import { fileURLToPath } from "node:url";
 import path from "path";
 import process from "process";
 import dotenv from "dotenv";
-import { google } from "googleapis";
+import { supabaseSheetsClient, closeSupabase } from "./server/supabase-sheets-client.mjs";
 import { canonicalOffice, officeRecordKey } from "./offices.mjs";
 
  dotenv.config();
 
-const GOOGLE_SHEET_ID = process.env.GOOGLE_SHEET_ID;
+const STORAGE_ID = "supabase";
 const LAST_WORKED_TAB = process.env.GOOGLE_SHEET_TAB || "Last Worked";
 const CURRENT_WEEK_TAB = process.env.CURRENT_WEEK_SHEET_TAB || "Current Week Avg";
 const LAST_WEEK_TAB = process.env.LAST_WEEK_SHEET_TAB || "Last Week Avg";
 const OUTPUT_TAB = process.env.TEAM_REP_GAPS_TAB || "Team/Rep Gaps";
 const GAP_SETTINGS_TAB = process.env.GAP_FOCUS_SETTINGS_TAB || "Gap Focus Settings";
-const GOOGLE_SERVICE_ACCOUNT_FILE =
-  process.env.GOOGLE_SERVICE_ACCOUNT_FILE ||
-  path.join(process.cwd(), "google-service-account.json");
-
-const CREDENTIALS_PATH = path.isAbsolute(GOOGLE_SERVICE_ACCOUNT_FILE)
-  ? GOOGLE_SERVICE_ACCOUNT_FILE
-  : path.join(process.cwd(), GOOGLE_SERVICE_ACCOUNT_FILE);
 
 
 const DEFAULT_GAP_CONFIG = [
@@ -96,24 +90,18 @@ function valueAt(row, index) {
   return index >= 0 ? row[index] : "";
 }
 
-async function getSheetsClient() {
-  if (!GOOGLE_SHEET_ID) throw new Error("GOOGLE_SHEET_ID is missing from .env");
-  if (!fs.existsSync(CREDENTIALS_PATH)) {
-    throw new Error(`Google credentials file not found: ${CREDENTIALS_PATH}`);
-  }
-  const auth = new google.auth.GoogleAuth({
-    keyFile: CREDENTIALS_PATH,
-    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
-  });
-  return google.sheets({ version: "v4", auth });
+async function getSupabaseClient() {
+  if (!process.env.SUPABASE_DB_URL) throw new Error("Missing SUPABASE_DB_URL: WorkMyT storage requires Supabase");
+  return supabaseSheetsClient();
 }
 
-const AGENTS_TAB = process.env.AGENTS_SHEET_TAB || "Agents";
+const AGENTS_TAB = process.env.AGENTS_SHEET_NAME || process.env.AGENTS_SHEET_TAB || "Agents";
 
 async function loadAgents(sheets) {
   const { headers, rows } = await readTab(sheets, AGENTS_TAB);
 
   const nameIndex = getHeaderIndex(headers, ["repName"], true);
+  const officeIndex = getHeaderIndex(headers, ["office", "campaign"]);
   const teamIndex = getHeaderIndex(headers, ["team"], true);
   const leadIndex = getHeaderIndex(headers, [
     "teamLead",
@@ -124,6 +112,7 @@ async function loadAgents(sheets) {
   return rows
     .map((row) => ({
       repName: normalizeText(row[nameIndex]),
+      office: canonicalOffice(valueAt(row, officeIndex)),
       team: normalizeText(row[teamIndex]),
       teamLead: normalizeText(row[leadIndex]),
     }))
@@ -132,7 +121,7 @@ async function loadAgents(sheets) {
 
 async function readTab(sheets, tab) {
   const response = await sheets.spreadsheets.values.get({
-    spreadsheetId: GOOGLE_SHEET_ID,
+    spreadsheetId: STORAGE_ID,
     range: `'${tab}'!A:AZ`,
     valueRenderOption: "UNFORMATTED_VALUE",
   });
@@ -264,7 +253,7 @@ async function loadGapFocusSettings(sheets) {
     ];
 
     await sheets.spreadsheets.values.update({
-      spreadsheetId: GOOGLE_SHEET_ID,
+      spreadsheetId: STORAGE_ID,
       range: `'${GAP_SETTINGS_TAB}'!A1`,
       valueInputOption: "USER_ENTERED",
       requestBody: { values },
@@ -273,7 +262,7 @@ async function loadGapFocusSettings(sheets) {
     // Format the editable target columns as percentages.
     const sheetId = await getOrCreateSheet(sheets, GAP_SETTINGS_TAB);
     await sheets.spreadsheets.batchUpdate({
-      spreadsheetId: GOOGLE_SHEET_ID,
+      spreadsheetId: STORAGE_ID,
       requestBody: {
         requests: [
           {
@@ -566,13 +555,13 @@ function buildRows(reps) {
 
 async function getOrCreateSheet(sheets, title) {
   const spreadsheet = await sheets.spreadsheets.get({
-    spreadsheetId: GOOGLE_SHEET_ID,
+    spreadsheetId: STORAGE_ID,
     fields: "sheets.properties",
   });
   const existing = spreadsheet.data.sheets?.find((s) => s.properties?.title === title);
   if (existing) return existing.properties.sheetId;
   const result = await sheets.spreadsheets.batchUpdate({
-    spreadsheetId: GOOGLE_SHEET_ID,
+    spreadsheetId: STORAGE_ID,
     requestBody: { requests: [{ addSheet: { properties: { title } } }] },
   });
   return result.data.replies?.[0]?.addSheet?.properties?.sheetId;
@@ -984,13 +973,13 @@ async function formatSheet(sheets, sheetId, reps, rows) {
   }
 
   await sheets.spreadsheets.batchUpdate({
-    spreadsheetId: GOOGLE_SHEET_ID,
+    spreadsheetId: STORAGE_ID,
     requestBody: { requests },
   });
 }
 
 async function run() {
-  const sheets = await getSheetsClient();
+  const sheets = await getSupabaseClient();
   await loadGapFocusSettings(sheets);
 
   const agents = await loadAgents(sheets);
@@ -1009,17 +998,12 @@ async function run() {
   const rows = buildRows(reps);
   const sheetId = await getOrCreateSheet(sheets, OUTPUT_TAB);
 
-  await sheets.spreadsheets.values.clear({
-    spreadsheetId: GOOGLE_SHEET_ID,
-    range: `'${OUTPUT_TAB}'!A:AZ`,
-  });
-  await sheets.spreadsheets.values.update({
-    spreadsheetId: GOOGLE_SHEET_ID,
+  await sheets.spreadsheets.values.replace({
+    spreadsheetId: STORAGE_ID,
     range: `'${OUTPUT_TAB}'!A1`,
     valueInputOption: "USER_ENTERED",
     requestBody: { values: rows },
   });
-  await formatSheet(sheets, sheetId, reps, rows);
 
   const teams = new Set(reps.map((rep) => rep.team));
   console.log(`[team-gaps] reps=${reps.length}`);
@@ -1029,10 +1013,10 @@ async function run() {
   console.log(`[team-gaps] source last-week="${LAST_WEEK_TAB}"`);
   console.log(`[team-gaps] gap-focus settings="${GAP_SETTINGS_TAB}"`);
   console.log(`[team-gaps] tab="${OUTPUT_TAB}" updated`);
-  console.log(`[team-gaps] https://docs.google.com/spreadsheets/d/${GOOGLE_SHEET_ID}`);
+  console.log("[team-gaps] Saved directly to Supabase");
 }
 
-run().catch((error) => {
-  console.error("[fatal]", error);
-  process.exit(1);
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  run().finally(closeSupabase).catch(error=>{console.error("[fatal]",error);process.exitCode=1});
+}
+export { run };

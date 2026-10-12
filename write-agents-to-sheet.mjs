@@ -1,14 +1,15 @@
 import process from "node:process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
 import dotenv from "dotenv";
-import { google } from "googleapis";
+import { supabaseSheetsClient, closeSupabase } from "./server/supabase-sheets-client.mjs";
 import { DEFAULT_OFFICE, canonicalOffice, officeRecordKey } from "./offices.mjs";
 
 dotenv.config();
 
-const SPREADSHEET_ID =
-  process.env.GOOGLE_SHEET_ID || "1iV9tUK8fIVHPrkR7PlaOzIkBAdR6kOxWAatOQrzDWMw";
-const SOURCE_SHEET_NAME = process.env.LAST_WORKED_SHEET_NAME || "Last Worked";
+const SPREADSHEET_ID = "supabase";
+const SOURCE_SHEET_NAME = process.env.LAST_WORKED_SHEET_NAME || process.env.GOOGLE_SHEET_TAB || "Last Worked";
 const AGENTS_SHEET_NAME = process.env.AGENTS_SHEET_NAME || "Agents";
 const FALLBACK_OFFICE = process.env.DEFAULT_OFFICE || DEFAULT_OFFICE;
 
@@ -43,20 +44,9 @@ function valueAt(row, index) {
   return index >= 0 ? String(row[index] ?? "").trim() : "";
 }
 
-if (!SPREADSHEET_ID) {
-  throw new Error("Missing GOOGLE_SHEET_ID in .env");
-}
-
-if (!process.env.GOOGLE_SERVICE_ACCOUNT_FILE) {
-  throw new Error("Missing GOOGLE_SERVICE_ACCOUNT_FILE in .env");
-}
-
-const auth = new google.auth.GoogleAuth({
-  keyFile: process.env.GOOGLE_SERVICE_ACCOUNT_FILE,
-  scopes: ["https://www.googleapis.com/auth/spreadsheets"],
-});
-
-const sheets = google.sheets({ version: "v4", auth });
+export async function run() {
+if (!process.env.SUPABASE_DB_URL) throw new Error("Missing SUPABASE_DB_URL");
+const sheets = supabaseSheetsClient();
 
 const spreadsheet = await sheets.spreadsheets.get({
   spreadsheetId: SPREADSHEET_ID,
@@ -108,7 +98,7 @@ const sourceResponse = await sheets.spreadsheets.values.get({
 const sourceValues = sourceResponse.data.values ?? [];
 if (sourceValues.length === 0) {
   console.log(`[agents] "${SOURCE_SHEET_NAME}" is empty. Nothing to add.`);
-  process.exit(0);
+  return;
 }
 
 const sourceHeaders = sourceValues[0] ?? [];
@@ -203,7 +193,7 @@ for (const row of sourceRows) {
     repKey: crypto.randomUUID(),
     repName,
     office,
-    repType: valueAt(row, repTypeIndex),
+    repType: valueAt(row, repTypeIndex) || "New Rep",
     team: valueAt(row, teamIndex),
     teamLead: valueAt(row, teamLeadIndex),
     attendance: "in",
@@ -215,7 +205,7 @@ if (newAgents.length === 0) {
   console.log(
     `[agents] No new reps found. "${AGENTS_SHEET_NAME}" is already up to date.`
   );
-  process.exit(0);
+  return;
 }
 
 // Build rows in the Agents sheet's existing column order so manual/custom columns remain untouched.
@@ -251,4 +241,9 @@ console.log(
 );
 for (const agent of newAgents) {
   console.log(`  + ${agent.repName}`);
+}
+
+}
+if(process.argv[1] && path.resolve(process.argv[1])===fileURLToPath(import.meta.url)) {
+  run().finally(closeSupabase).catch(error=>{console.error("[agents]",error);process.exitCode=1});
 }

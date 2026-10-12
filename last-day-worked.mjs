@@ -6,7 +6,7 @@ import { fileURLToPath } from "url";
 import puppeteer from "puppeteer";
 import dotenv from "dotenv";
 dotenv.config();
-import { google } from "googleapis";
+import { supabaseSheetsClient, closeSupabase } from "./server/supabase-sheets-client.mjs";
 import { WORKMYT_CAMPAIGN_TARGETS, canonicalOffice, officeRecordKey } from "./offices.mjs";
 // ============================================================
 // CONFIG
@@ -30,8 +30,7 @@ const OUTPUT_JSON =
     "fieldday-performance.json"
   );
 
-const GOOGLE_SHEET_ID =
-  process.env.GOOGLE_SHEET_ID;
+const STORAGE_ID = "supabase";
 
 const GOOGLE_SHEET_TAB =
   process.env.GOOGLE_SHEET_TAB || "Last Worked";
@@ -39,20 +38,6 @@ const GOOGLE_SHEET_TAB =
 const LAST_WORKED_HISTORY_TAB =
   process.env.LAST_WORKED_HISTORY_SHEET_NAME || "Last Worked History";
 
-const GOOGLE_SERVICE_ACCOUNT_FILE =
-  process.env.GOOGLE_SERVICE_ACCOUNT_FILE ||
-  path.join(
-    process.cwd(),
-    "google-service-account.json"
-  );
-
-const GOOGLE_CREDENTIALS_PATH =
-  path.isAbsolute(GOOGLE_SERVICE_ACCOUNT_FILE)
-    ? GOOGLE_SERVICE_ACCOUNT_FILE
-    : path.join(
-        process.cwd(),
-        GOOGLE_SERVICE_ACCOUNT_FILE
-      );
 
 // Chrome configuration
 const CHROME_PATH =
@@ -534,18 +519,9 @@ function writeJson(filePath, data) {
   );
 }
 
-async function getGoogleSheetsClient() {
-  const auth = new google.auth.GoogleAuth({
-    keyFile: GOOGLE_CREDENTIALS_PATH,
-    scopes: [
-      "https://www.googleapis.com/auth/spreadsheets",
-    ],
-  });
-
-  return google.sheets({
-    version: "v4",
-    auth,
-  });
+async function getSupabaseClient() {
+  if (!process.env.SUPABASE_DB_URL) throw new Error("Missing SUPABASE_DB_URL: WorkMyT storage requires Supabase");
+  return supabaseSheetsClient();
 }
 
 function buildGoogleSheetRows(output) {
@@ -612,7 +588,7 @@ async function formatGoogleSheet(
 ) {
   const spreadsheet =
     await sheets.spreadsheets.get({
-      spreadsheetId: GOOGLE_SHEET_ID,
+      spreadsheetId: STORAGE_ID,
       fields: "sheets.properties",
     });
 
@@ -625,7 +601,7 @@ async function formatGoogleSheet(
 
   if (!targetSheet) {
     throw new Error(
-      `Google Sheet tab "${GOOGLE_SHEET_TAB}" was not found.`
+      `Supabase data tab "${GOOGLE_SHEET_TAB}" was not found.`
     );
   }
 
@@ -857,7 +833,7 @@ async function formatGoogleSheet(
   });
 
   await sheets.spreadsheets.batchUpdate({
-    spreadsheetId: GOOGLE_SHEET_ID,
+    spreadsheetId: STORAGE_ID,
     requestBody: {
       requests,
     },
@@ -946,7 +922,7 @@ async function upsertDailyRecordsToHistory(sheets, dailyRecords, generatedAt) {
   const incoming = buildHistoryRows(dailyRecords, generatedAt);
 
   const spreadsheet = await sheets.spreadsheets.get({
-    spreadsheetId: GOOGLE_SHEET_ID,
+    spreadsheetId: STORAGE_ID,
     fields: "sheets.properties",
   });
   let historySheet = spreadsheet.data.sheets?.find(
@@ -954,13 +930,13 @@ async function upsertDailyRecordsToHistory(sheets, dailyRecords, generatedAt) {
   );
   if (!historySheet) {
     await sheets.spreadsheets.batchUpdate({
-      spreadsheetId: GOOGLE_SHEET_ID,
+      spreadsheetId: STORAGE_ID,
       requestBody: {
         requests: [{ addSheet: { properties: { title: LAST_WORKED_HISTORY_TAB } } }],
       },
     });
     await sheets.spreadsheets.values.update({
-      spreadsheetId: GOOGLE_SHEET_ID,
+      spreadsheetId: STORAGE_ID,
       range: `'${LAST_WORKED_HISTORY_TAB}'!A1`,
       valueInputOption: "RAW",
       requestBody: { values: [incoming.headers] },
@@ -968,7 +944,7 @@ async function upsertDailyRecordsToHistory(sheets, dailyRecords, generatedAt) {
   }
 
   const existingResponse = await sheets.spreadsheets.values.get({
-    spreadsheetId: GOOGLE_SHEET_ID,
+    spreadsheetId: STORAGE_ID,
     range: `'${LAST_WORKED_HISTORY_TAB}'!A:AZ`,
   });
   const existingValues = existingResponse.data.values || [];
@@ -1012,13 +988,8 @@ async function upsertDailyRecordsToHistory(sheets, dailyRecords, generatedAt) {
     String(left[repIndex] || "").localeCompare(String(right[repIndex] || ""))
   );
 
-  await sheets.spreadsheets.values.clear({
-    spreadsheetId: GOOGLE_SHEET_ID,
-    range: `'${LAST_WORKED_HISTORY_TAB}'!A:AZ`,
-  });
-
-  await sheets.spreadsheets.values.update({
-    spreadsheetId: GOOGLE_SHEET_ID,
+  await sheets.spreadsheets.values.replace({
+    spreadsheetId: STORAGE_ID,
     range: `'${LAST_WORKED_HISTORY_TAB}'!A1`,
     valueInputOption: "RAW",
     requestBody: { values: [incoming.headers, ...mergedRows, ...preservedRows] },
@@ -1030,27 +1001,22 @@ async function upsertDailyRecordsToHistory(sheets, dailyRecords, generatedAt) {
   );
 }
 
-async function writeOutputToGoogleSheet(output, dailyRecords, { historyOnly = false } = {}) {
+async function writeOutputToSupabase(output, dailyRecords, { historyOnly = false } = {}) {
   const sheets =
-    await getGoogleSheetsClient();
+    await getSupabaseClient();
 
   await upsertDailyRecordsToHistory(sheets, dailyRecords, output.generatedAt);
 
   if (historyOnly) {
-    console.log('[sheet] Historical run complete; live "Last Worked" tab was not replaced.');
+    console.log('[supabase] Historical run complete; live "Last Worked" tab was not replaced.');
     return;
   }
 
   const values =
     buildGoogleSheetRows(output);
 
-  await sheets.spreadsheets.values.clear({
-    spreadsheetId: GOOGLE_SHEET_ID,
-    range: `'${GOOGLE_SHEET_TAB}'!A:Z`,
-  });
-
-  await sheets.spreadsheets.values.update({
-    spreadsheetId: GOOGLE_SHEET_ID,
+  await sheets.spreadsheets.values.replace({
+    spreadsheetId: STORAGE_ID,
     range: `'${GOOGLE_SHEET_TAB}'!A1`,
     valueInputOption: "USER_ENTERED",
     requestBody: {
@@ -1058,15 +1024,10 @@ async function writeOutputToGoogleSheet(output, dailyRecords, { historyOnly = fa
     },
   });
 
-  await formatGoogleSheet(
-    sheets,
-    output,
-    values.length
-  );
 
 
   console.log(
-    "[sheet] Google Sheet updated."
+    "[supabase] Saved directly to Supabase."
   );
 }
 // ============================================================
@@ -1789,7 +1750,7 @@ async function run() {
       reps,
     };
 
-    await writeOutputToGoogleSheet(output, dailyRecords, {
+    await writeOutputToSupabase(output, dailyRecords, {
       historyOnly: commandLine.historyOnly,
     });
 
@@ -1811,13 +1772,14 @@ const wasRunDirectly =
   path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
 
 if (wasRunDirectly) {
-  run().catch((error) => {
+  run().finally(closeSupabase).catch((error) => {
     console.error("[fatal]", error);
     process.exit(1);
   });
 }
 
 export {
+  writeOutputToSupabase,
   buildDateRange,
   buildHistoryRows,
   historyRowKey,
