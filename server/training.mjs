@@ -16,7 +16,7 @@ export function trainingWatch(agents, { office, mode = "both", threshold = 20 } 
     const stats = agent.stats || {};
     const focus = stats["Biggest Gap Stage"] || stats["Primary Gap"] || stats["Last Week Gap"] || "Needs review";
     return [{repKey: agent.repKey, repName: agent.repName, office: selected, role, focus,
-      lastWeekElectric: electric, weekEnd:agent.trainingProduction?.weekEnd || "",
-      currentWeekElectric:agent.trainingProduction?.currentWeekElectric ?? null,currentWeekEnd:agent.trainingProduction?.currentWeekEnd || "", sourceFile: agent.trainingProduction?.sourceFile || ""}];
+      lastWeekElectric: electric,lastWeekGas:agent.trainingProduction?.gas ?? null,lastWeekProduction:agent.trainingProduction?.production ?? null, weekEnd:agent.trainingProduction?.weekEnd || "",
+      currentWeekElectric:agent.trainingProduction?.currentWeekElectric ?? null,currentWeekGas:agent.trainingProduction?.currentWeekGas ?? null,currentWeekProduction:agent.trainingProduction?.currentWeekProduction ?? null,currentWeekEnd:agent.trainingProduction?.currentWeekEnd || "", sourceFile: agent.trainingProduction?.sourceFile || ""}];
   }).sort((a,b) => (a.lastWeekElectric ?? -1) - (b.lastWeekElectric ?? -1) || a.repName.localeCompare(b.repName));
 }

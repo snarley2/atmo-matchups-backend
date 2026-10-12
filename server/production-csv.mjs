@@ -33,6 +33,11 @@ function weeklyElectric(value) {
   return match ? Number(match[1]) : null;
 }
 
+function weeklyGasPair(value) {
+  const match = String(value ?? "").trim().match(/^\d+(?:\.\d+)?\s*\/\s*(\d+(?:\.\d+)?)$/);
+  return match ? Number(match[1]) : null;
+}
+
 function nameKeys(value) {
   const clean = String(value || "")
     .replace(/[↓↑]/g, "")
@@ -115,7 +120,7 @@ function parseNoctisLog(rows,fileName) {
     return [{repName,repType:/\((?:PL|L|OWNER)\)\s*$/i.test(raw)?"Leader":"New Rep",keys,aliases:nameAliases(repName),sourceFile:fileName,lastWeek:weeklyElectric(row[header.findIndex(x=>/^LW T El$/i.test(String(x||"")))]),twoWeeksAgo:null,
       lastDay,electric:lastDay?.electric||0,gas:lastDay?.gas||0,partials:lastDay?.partials||0,
       current:lastDay?.production||0,overall:lastDay?.production||0,production:lastDay?.production||0,
-      weekElectric:e,weekGas:g}];
+      weekElectric:e,weekGas:totalG>=0?weeklyElectric(row[totalG]):null,lastWeekGas:weeklyElectric(row[header.findIndex(x=>/^LW T Gas$/i.test(String(x||"")))])}];
   });
 }
 
@@ -140,7 +145,7 @@ function parseAiLog(rows, fileName) {
     const production = (electric + partials) * 40 + gas * 18;
     const lastWeek = lastIndex >= 0 && String(row[lastIndex] || "").trim() !== "" ? weeklyElectric(row[lastIndex]) : null;
     const twoWeeksAgo = twoIndex >= 0 && String(row[twoIndex] || "").trim() !== "" ? number(row[twoIndex]) : null;
-    return [datedRecord({ repName: repName.replace(/[↓↑]/g, "").trim(), repType: String(row[1]||"New Rep").trim(), keys, aliases: nameAliases(repName), current: production, electric, gas, production, lastWeek, twoWeeksAgo, overall: production, partials, sourceFile: fileName, weekElectric: currentIndex >= 0 ? weeklyElectric(row[currentIndex]) : null },row,3,fileName)];
+    return [datedRecord({ repName: repName.replace(/[↓↑]/g, "").trim(), repType: String(row[1]||"New Rep").trim(), keys, aliases: nameAliases(repName), current: production, electric, gas, production, lastWeek, twoWeeksAgo, overall: production, partials, sourceFile: fileName, weekElectric: currentIndex >= 0 ? weeklyElectric(row[currentIndex]) : null, weekGas:gasIndex>=0?weeklyElectric(row[gasIndex]):null, lastWeekGas:weeklyElectric(row[header.findIndex(value=>value.toLowerCase()==="lw gas")]) },row,3,fileName)];
   });
 }
 
@@ -166,7 +171,7 @@ function parseStandardLog(rows, fileName) {
     const production = (electric + partials) * 40 + gas * 18;
     const lastWeek = prevIndex >= 0 ? weeklyElectric(row[prevIndex]) : null;
     const twoWeeksAgo = twoIndex >= 0 ? weeklyElectric(row[twoIndex]) : null;
-    return [datedRecord({ repName, keys, aliases: nameAliases(repName), current: production, electric, gas, production, lastWeek, twoWeeksAgo, overall: production, partials, sourceFile: fileName, weekElectric: Number.isInteger(totalElectricIndex) ? weeklyElectric(row[totalElectricIndex]) : null },row,1,fileName)];
+    return [datedRecord({ repName, keys, aliases: nameAliases(repName), current: production, electric, gas, production, lastWeek, twoWeeksAgo, overall: production, partials, sourceFile: fileName, weekElectric: Number.isInteger(totalElectricIndex) ? weeklyElectric(row[totalElectricIndex]) : null, weekGas:Number.isInteger(totalGasIndex)?weeklyElectric(row[totalGasIndex]):null, lastWeekGas:prevIndex>=0?weeklyGasPair(row[prevIndex]):null },row,1,fileName)];
   });
 }
 
@@ -302,7 +307,11 @@ export function attachTrainingProduction(agents = [], today = new Intl.DateTimeF
     const completed = matching.find(record => record.weekEnd === weekEnd && record.weekElectric != null);
     const useCurrentHistory = !completed && weekEnd === previousEnd && current?.lastWeek != null;
     const electric = completed?.weekElectric ?? (useCurrentHistory ? current.lastWeek : null);
-    return {...agent, trainingProduction:{electric,sourceFile:completed?.sourceFile || (useCurrentHistory ? current.sourceFile : ""),weekEnd,
-      currentWeekElectric:current?.weekElectric ?? null,currentWeekEnd:currentEnd,currentSourceFile:current?.sourceFile || ""}};
+    const gas = completed ? completed.weekGas ?? null : useCurrentHistory ? current.lastWeekGas ?? null : null;
+    const currentWeekElectric=current?.weekElectric ?? null, currentWeekGas=current?.weekGas ?? null;
+    const production=electric!==null&&gas!==null?electric*40+gas*18:null;
+    const currentWeekProduction=currentWeekElectric!==null&&currentWeekGas!==null?currentWeekElectric*40+currentWeekGas*18:null;
+    return {...agent, trainingProduction:{electric,gas,production,sourceFile:completed?.sourceFile || (useCurrentHistory ? current.sourceFile : ""),weekEnd,
+      currentWeekElectric,currentWeekGas,currentWeekProduction,currentWeekEnd:currentEnd,currentSourceFile:current?.sourceFile || ""}};
   });
 }
