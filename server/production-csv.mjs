@@ -111,8 +111,8 @@ function parseNoctisLog(rows,fileName) {
     const keys=nameKeys(repName);
     if(!keys.length || !/[a-z]{2,}.*[a-z]{2,}/i.test(repName) || /^(total|electric|team|gas|week)/i.test(repName))return [];
     const lastDay=dailyResult(row,1,fileName);
-    const e=totalE>=0?number(row[totalE]):0,g=totalG>=0?number(row[totalG]):0;
-    return [{repName,repType:/\((?:PL|L|OWNER)\)\s*$/i.test(raw)?"Leader":"New Rep",keys,aliases:nameAliases(repName),sourceFile:fileName,lastWeek:null,twoWeeksAgo:null,
+    const e=totalE>=0?weeklyElectric(row[totalE]):null,g=totalG>=0?number(row[totalG]):0;
+    return [{repName,repType:/\((?:PL|L|OWNER)\)\s*$/i.test(raw)?"Leader":"New Rep",keys,aliases:nameAliases(repName),sourceFile:fileName,lastWeek:weeklyElectric(row[header.findIndex(x=>/^LW T El$/i.test(String(x||"")))]),twoWeeksAgo:null,
       lastDay,electric:lastDay?.electric||0,gas:lastDay?.gas||0,partials:lastDay?.partials||0,
       current:lastDay?.production||0,overall:lastDay?.production||0,production:lastDay?.production||0,
       weekElectric:e,weekGas:g}];
@@ -140,7 +140,7 @@ function parseAiLog(rows, fileName) {
     const production = (electric + partials) * 40 + gas * 18;
     const lastWeek = lastIndex >= 0 && String(row[lastIndex] || "").trim() !== "" ? weeklyElectric(row[lastIndex]) : null;
     const twoWeeksAgo = twoIndex >= 0 && String(row[twoIndex] || "").trim() !== "" ? number(row[twoIndex]) : null;
-    return [datedRecord({ repName: repName.replace(/[↓↑]/g, "").trim(), repType: String(row[1]||"New Rep").trim(), keys, aliases: nameAliases(repName), current: production, electric, gas, production, lastWeek, twoWeeksAgo, overall: production, partials, sourceFile: fileName, weekElectric: electric },row,3,fileName)];
+    return [datedRecord({ repName: repName.replace(/[↓↑]/g, "").trim(), repType: String(row[1]||"New Rep").trim(), keys, aliases: nameAliases(repName), current: production, electric, gas, production, lastWeek, twoWeeksAgo, overall: production, partials, sourceFile: fileName, weekElectric: currentIndex >= 0 ? weeklyElectric(row[currentIndex]) : null },row,3,fileName)];
   });
 }
 
@@ -166,7 +166,7 @@ function parseStandardLog(rows, fileName) {
     const production = (electric + partials) * 40 + gas * 18;
     const lastWeek = prevIndex >= 0 ? weeklyElectric(row[prevIndex]) : null;
     const twoWeeksAgo = twoIndex >= 0 ? weeklyElectric(row[twoIndex]) : null;
-    return [datedRecord({ repName, keys, aliases: nameAliases(repName), current: production, electric, gas, production, lastWeek, twoWeeksAgo, overall: production, partials, sourceFile: fileName, weekElectric: electric },row,1,fileName)];
+    return [datedRecord({ repName, keys, aliases: nameAliases(repName), current: production, electric, gas, production, lastWeek, twoWeeksAgo, overall: production, partials, sourceFile: fileName, weekElectric: Number.isInteger(totalElectricIndex) ? weeklyElectric(row[totalElectricIndex]) : null },row,1,fileName)];
   });
 }
 
@@ -284,19 +284,25 @@ export function expandAgentsFromProduction(agents = []) {
   return [...agents, ...discovered];
 }
 
-// Training uses the previous completed Sunday-Saturday week, independent of
-// Work/Store production which intentionally represents the last recorded day.
-export function attachTrainingProduction(agents = [], today = new Intl.DateTimeFormat("en-CA", {timeZone:"America/New_York",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date())) {
+// Training eligibility always uses a finished Sunday-Saturday week. A new
+// Monday log supplies current progress, never a replacement eligibility total.
+export function attachTrainingProduction(agents = [], today = new Intl.DateTimeFormat("en-CA", {timeZone:"America/New_York",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date()), records = getProductionLogRecords()) {
   const date = new Date(`${today}T12:00:00Z`);
   const previousEnd = new Date(date.getTime() - (date.getUTCDay() + 1) * 86400000).toISOString().slice(0,10);
   const currentEnd = new Date(new Date(`${previousEnd}T12:00:00Z`).getTime() + 7 * 86400000).toISOString().slice(0,10);
-  const records = getProductionLogRecords();
+  const dated = records.map(record => ({...record, weekEnd:fileWeekEnd(record.sourceFile)?.toISOString().slice(0,10)})).filter(record => record.weekEnd);
   return agents.map(agent => {
+    const officeRecords = dated.filter(record => productionOffice(record.sourceFile) === canonicalOffice(agent.office));
     const keys = nameKeys(agent.repName);
-    const matching = records.filter(record => productionOffice(record.sourceFile) === canonicalOffice(agent.office) && record.keys.some(key => keys.includes(key)));
-    const completed = matching.find(record => fileWeekEnd(record.sourceFile)?.toISOString().slice(0,10) === previousEnd);
-    const current = matching.find(record => fileWeekEnd(record.sourceFile)?.toISOString().slice(0,10) === currentEnd && record.lastWeek !== null);
-    const electric = completed?.weekElectric ?? current?.lastWeek ?? null;
-    return {...agent, trainingProduction:{electric,sourceFile:(completed || current)?.sourceFile || "",weekEnd:previousEnd}};
+    const matching = officeRecords.filter(record => record.keys.some(key => keys.includes(key)));
+    const current = matching.find(record => record.weekEnd === currentEnd);
+    // Choose the office's week, not a different old week for each missing rep.
+    const availableEnd = officeRecords.filter(record => record.weekEnd <= previousEnd).map(record => record.weekEnd).sort().at(-1);
+    const weekEnd = officeRecords.some(record => record.weekEnd === previousEnd) || officeRecords.some(record => record.weekEnd === currentEnd) ? previousEnd : availableEnd || previousEnd;
+    const completed = matching.find(record => record.weekEnd === weekEnd && record.weekElectric != null);
+    const useCurrentHistory = !completed && weekEnd === previousEnd && current?.lastWeek != null;
+    const electric = completed?.weekElectric ?? (useCurrentHistory ? current.lastWeek : null);
+    return {...agent, trainingProduction:{electric,sourceFile:completed?.sourceFile || (useCurrentHistory ? current.sourceFile : ""),weekEnd,
+      currentWeekElectric:current?.weekElectric ?? null,currentWeekEnd:currentEnd,currentSourceFile:current?.sourceFile || ""}};
   });
 }

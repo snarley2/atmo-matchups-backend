@@ -21,14 +21,33 @@ test("training filters offices, roles and recorded zero without losing unknown w
   assert.equal(trainingWatch(reps,{threshold:0}).length,1);
 });
 
-test("training reads weekly totals rather than the last day's store production", () => {
+test("uploaded totals remain the baseline Sunday and Monday", () => {
   const agents=[{repKey:"test",repName:"Brennon Hill",office:"MADHAV MEHTA",repType:"New Rep"}];
-  const [previous] = attachTrainingProduction(agents,"2026-10-04");
-  assert.equal(previous.trainingProduction.weekEnd,"2026-10-03");
-  assert.equal(previous.trainingProduction.electric,20);
-  assert.equal(trainingWatch([previous]).length,0);
-  const [latest] = attachTrainingProduction(agents,"2026-10-11");
-  assert.equal(latest.trainingProduction.weekEnd,"2026-10-10");
-  assert.equal(latest.trainingProduction.electric,8);
-  assert.equal(trainingWatch([latest]).length,1);
+  for (const day of ["2026-10-11", "2026-10-12"]) {
+    const [rep] = attachTrainingProduction(agents,day);
+    assert.equal(rep.trainingProduction.weekEnd,"2026-10-10");
+    assert.equal(rep.trainingProduction.electric,24);
+    assert.equal(trainingWatch([rep]).length,0);
+  }
+});
+
+test("Monday rollover, conflicting carry-forward, missing and stale logs", () => {
+  const agent={repKey:"test",repName:"Example Rep",office:"MADHAV MEHTA",repType:"Leader"};
+  const record=(week,electric,lastWeek=null)=>({repName:agent.repName,keys:["examplerep"],sourceFile:`AI production log - 10.${week}.26.tsv`,weekElectric:electric,lastWeek});
+  const completed=record("10",24), newWeek=record("17",0,5);
+  const get=(day,records)=>attachTrainingProduction([agent],day,records)[0];
+  assert.equal(get("2026-10-11",[completed]).trainingProduction.electric,24);
+  assert.equal(get("2026-10-12",[newWeek,completed]).trainingProduction.electric,24);
+  assert.equal(get("2026-10-12",[completed,newWeek]).trainingProduction.currentWeekElectric,0);
+  assert.equal(trainingWatch([get("2026-10-12",[completed,newWeek])]).length,0);
+  assert.equal(get("2026-10-18",[completed,newWeek]).trainingProduction.weekEnd,"2026-10-17");
+  assert.equal(trainingWatch([get("2026-10-18",[completed,newWeek])]).length,1);
+  const carried=get("2026-10-12",[record("17",1,12)]);
+  assert.equal(carried.trainingProduction.electric,12);
+  assert.equal(carried.trainingProduction.weekEnd,"2026-10-10");
+  assert.equal(get("2026-10-12",[record("17",1,null)]).trainingProduction.electric,null);
+  const stale=get("2026-10-18",[completed]);
+  assert.equal(stale.trainingProduction.weekEnd,"2026-10-10");
+  assert.equal(stale.trainingProduction.electric,24);
+  assert.equal(trainingWatch([{...carried,attendance:"absent"}]).length,0);
 });
