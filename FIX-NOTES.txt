@@ -1,0 +1,20 @@
+Office and Weekly Training fixes
+
+Update both the frontend and backend, then redeploy both services.
+
+Frontend changed: src/main.jsx, src/api.js.
+Backend changed: offices.mjs, server/index.mjs, server/production-csv.mjs.
+Backend added: server/training.mjs, tests/training.test.mjs.
+
+Team Gaps and Campaign/Office Info now stay within the selected office.
+All four office identities are enabled; the existing WorkMyT automation campaign selection is unchanged.
+Weekly Training now has its missing admin API endpoint and reloads for the selected office.
+Eligibility uses previous completed Sunday-Saturday week's electric total from the TSV logs.
+New reps and leaders below the selected target appear; missing weekly data appears as needing review.
+Attendance remains authoritative for rep roles.
+
+Keep your existing backend .env and google-service-account.json. Credentials, Git history, and node_modules are excluded from these ZIPs.
+Run npm install in each project before starting or building.
+Validation: frontend production build passed; backend syntax checks passed; three training regression tests passed.
+Run backend tests from the backend folder with: node --test tests/training.test.mjs
+Live Google Sheets and deployed services were not exercised in this environment.

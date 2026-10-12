@@ -5,6 +5,7 @@ import { canonicalOffice } from "../offices.mjs";
 export function trainingWatch(agents, { office, mode = "both", threshold = 20 } = {}) {
   const selected = canonicalOffice(office);
   return agents.filter(agent => canonicalOffice(agent.office) === selected).flatMap(agent => {
+    if (String(agent.attendance || "in").trim().toLowerCase() !== "in") return [];
     const role = String(agent.repType || "New Rep").trim();
     const leader = /leader|^(?:pl|l)$/i.test(role);
     const newer = /new|trainee|rookie|^rep$/i.test(role);
