@@ -7,7 +7,8 @@ import crypto from "node:crypto";
 import cron from "node-cron";
 import { getAgents, appendAgent, updateAgent, deleteAgent, appendMissingAgents, getGaps, getPerformanceTabs, saveMatchups, getDraftMatchups, saveDraftMatchups, getFinalMatchups, saveStoreMatchups, getStoreMatchups, saveWorkMatchups, getWorkMatchups, getFieldNotes, addFieldNote, getManualNumbers, upsertManualNumbers, getSuggestions, addSuggestion, getNumbersTracking } from "./sheets.mjs";
 import { combineAgentsAndGaps, generateGroups, generateStoreGroups, generateWorkGroups, STORE_CATALOG } from "./logic.mjs";
-import { attachProductionLogs, expandAgentsFromProduction, productionRepDirectory } from "./production-csv.mjs";
+import { attachProductionLogs, attachTrainingProduction, expandAgentsFromProduction, productionRepDirectory } from "./production-csv.mjs";
+import { trainingWatch } from "./training.mjs";
 import { runDailyAutomation, isDailyAutomationRunning } from "../run.mjs";
 import { DEFAULT_OFFICE, OFFICES, canonicalOffice } from "../offices.mjs";
 
@@ -487,6 +488,21 @@ app.post("/api/matchups", requireAdmin, async (req, res, next) => {
     const date = String(req.body.date || new Date().toISOString().slice(0, 10));
     const groups = Array.isArray(req.body.groups) ? req.body.groups : [];
     res.json(await saveMatchups({ date, groups, office: requestedOffice(req) }));
+  } catch (error) { next(error); }
+});
+
+app.get("/api/training-watch", requireAdmin, async (req, res, next) => {
+  try {
+    const office = requestedOffice(req);
+    const mode = String(req.query.mode || "both");
+    const threshold = Number(req.query.threshold ?? 20);
+    if (!["both", "new", "leaders"].includes(mode) || !Number.isFinite(threshold) || threshold < 0) {
+      return res.status(400).json({error:"Choose a valid rep type and a non-negative electric target."});
+    }
+    const [agents, gaps, performance] = await Promise.all([getAgents(), getGaps(), getPerformanceTabs()]);
+    const scoped = agentsForOffice(expandAgentsFromProduction(agents), office);
+    const combined = combineAgentsAndGaps(attachTrainingProduction(scoped), gaps, performance);
+    res.json({office, mode, threshold, reps:trainingWatch(combined, {office, mode, threshold})});
   } catch (error) { next(error); }
 });
 

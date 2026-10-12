@@ -138,9 +138,9 @@ function parseAiLog(rows, fileName) {
     const electric = currentIndex >= 0 ? number(row[currentIndex]) : 0;
     const gas = gasIndex >= 0 ? number(row[gasIndex]) : 0;
     const production = (electric + partials) * 40 + gas * 18;
-    const lastWeek = lastIndex >= 0 && String(row[lastIndex] || "").trim() !== "" ? number(row[lastIndex]) : null;
+    const lastWeek = lastIndex >= 0 && String(row[lastIndex] || "").trim() !== "" ? weeklyElectric(row[lastIndex]) : null;
     const twoWeeksAgo = twoIndex >= 0 && String(row[twoIndex] || "").trim() !== "" ? number(row[twoIndex]) : null;
-    return [datedRecord({ repName: repName.replace(/[↓↑]/g, "").trim(), repType: String(row[1]||"New Rep").trim(), keys, aliases: nameAliases(repName), current: production, electric, gas, production, lastWeek, twoWeeksAgo, overall: production, partials, sourceFile: fileName },row,3,fileName)];
+    return [datedRecord({ repName: repName.replace(/[↓↑]/g, "").trim(), repType: String(row[1]||"New Rep").trim(), keys, aliases: nameAliases(repName), current: production, electric, gas, production, lastWeek, twoWeeksAgo, overall: production, partials, sourceFile: fileName, weekElectric: electric },row,3,fileName)];
   });
 }
 
@@ -166,7 +166,7 @@ function parseStandardLog(rows, fileName) {
     const production = (electric + partials) * 40 + gas * 18;
     const lastWeek = prevIndex >= 0 ? weeklyElectric(row[prevIndex]) : null;
     const twoWeeksAgo = twoIndex >= 0 ? weeklyElectric(row[twoIndex]) : null;
-    return [datedRecord({ repName, keys, aliases: nameAliases(repName), current: production, electric, gas, production, lastWeek, twoWeeksAgo, overall: production, partials, sourceFile: fileName },row,1,fileName)];
+    return [datedRecord({ repName, keys, aliases: nameAliases(repName), current: production, electric, gas, production, lastWeek, twoWeeksAgo, overall: production, partials, sourceFile: fileName, weekElectric: electric },row,1,fileName)];
   });
 }
 
@@ -282,4 +282,21 @@ export function expandAgentsFromProduction(agents = []) {
   }
   // Existing Agents objects are retained untouched, in their original order.
   return [...agents, ...discovered];
+}
+
+// Training uses the previous completed Sunday-Saturday week, independent of
+// Work/Store production which intentionally represents the last recorded day.
+export function attachTrainingProduction(agents = [], today = new Intl.DateTimeFormat("en-CA", {timeZone:"America/New_York",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date())) {
+  const date = new Date(`${today}T12:00:00Z`);
+  const previousEnd = new Date(date.getTime() - (date.getUTCDay() + 1) * 86400000).toISOString().slice(0,10);
+  const currentEnd = new Date(new Date(`${previousEnd}T12:00:00Z`).getTime() + 7 * 86400000).toISOString().slice(0,10);
+  const records = getProductionLogRecords();
+  return agents.map(agent => {
+    const keys = nameKeys(agent.repName);
+    const matching = records.filter(record => productionOffice(record.sourceFile) === canonicalOffice(agent.office) && record.keys.some(key => keys.includes(key)));
+    const completed = matching.find(record => fileWeekEnd(record.sourceFile)?.toISOString().slice(0,10) === previousEnd);
+    const current = matching.find(record => fileWeekEnd(record.sourceFile)?.toISOString().slice(0,10) === currentEnd && record.lastWeek !== null);
+    const electric = completed?.weekElectric ?? current?.lastWeek ?? null;
+    return {...agent, trainingProduction:{electric,sourceFile:(completed || current)?.sourceFile || "",weekEnd:previousEnd}};
+  });
 }

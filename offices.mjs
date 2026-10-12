@@ -4,8 +4,8 @@ export const OFFICES = [
   { id: "madhav-mehta", name: "MADHAV MEHTA", label: "Madhav Mehta" },
   //
   { id: "canyon-tuman", name: "CANYON TUMAN", label: "Canyon Tuman" },
-  //{ id: "collin-willhelm", name: "COLLIN WILLHELM", label: "Collin Willhelm" },
-  //{ id: "keasel-broom", name: "KEASEL BROOM", label: "Keasel Broom" },
+  { id: "collin-willhelm", name: "COLLIN WILLHELM", label: "Collin Willhelm" },
+  { id: "keasel-broom", name: "KEASEL BROOM", label: "Keasel Broom" },
 ];
 
 // The office label and the actual WorkMyT campaign label are intentionally distinct.
@@ -27,7 +27,7 @@ export function normalizeOffice(value) {
 export function canonicalOffice(value) {
   const normalized = normalizeOffice(value);
   const aliases = {"MADHAV MEHAT":"MADHAV MEHTA","COLLIN WILHELM":"COLLIN WILLHELM","KEASEL BROOME":"KEASEL BROOM"};
-  return OFFICES.find((office) => office.name === (aliases[normalized] || normalized))?.name || DEFAULT_OFFICE;
+  return OFFICES.find((office) => office.name === (aliases[normalized] || normalized))?.name || aliases[normalized] || normalized || DEFAULT_OFFICE;
 }
 
 export function officeLabel(value) {
