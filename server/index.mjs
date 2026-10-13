@@ -8,6 +8,7 @@ import cron from "node-cron";
 import { getAgents, appendAgent, updateAgent, deleteAgent, appendMissingAgents, getGaps, getPerformanceTabs, saveMatchups, getDraftMatchups, saveDraftMatchups, getFinalMatchups, saveStoreMatchups, getStoreMatchups, saveWorkMatchups, getWorkMatchups, getFieldNotes, addFieldNote, getManualNumbers, upsertManualNumbers, getSuggestions, addSuggestion, getNumbersTracking } from "./sheets.mjs";
 import { combineAgentsAndGaps, generateGroups, generateStoreGroups, generateWorkGroups, STORE_CATALOG } from "./logic.mjs";
 import { attachProductionLogs, attachTrainingProduction, expandAgentsFromProduction, productionRepDirectory } from "./production-csv.mjs";
+import { registerCoachingRoutes } from "./coaching-routes.mjs";
 import { trainingWatch } from "./training.mjs";
 import { importProductionSheets, refreshProductionCache } from "./production-import.mjs";
 import { runDailyAutomation, isDailyAutomationRunning } from "../run.mjs";
@@ -286,6 +287,8 @@ function agentsForOffice(agents, office) {
 function requestedOffice(req) {
   return canonicalOffice(req.query?.office || req.body?.office || DEFAULT_OFFICE);
 }
+
+registerCoachingRoutes(app,{requireAdmin,requestedOffice,getAgents,expandAgentsFromProduction});
 
 async function buildBootstrap(office = DEFAULT_OFFICE) {
   const selectedOffice = canonicalOffice(office);

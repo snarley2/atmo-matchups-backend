@@ -107,7 +107,7 @@ function parseNoctisLog(rows,fileName) {
 function parseAiLog(rows, fileName) {
   const headerIndex = rows.findIndex((row) => String(row[0] || "").trim().toLowerCase() === "rep name");
   if (headerIndex < 0) return [];
-  const header = rows[headerIndex].map((value) => String(value || "").trim());
+  const header = Array.from(rows[headerIndex], value => String(value ?? "").trim());
   const detail = rows[headerIndex + 1] || [];
   const currentIndex = header.findIndex((value) => value.toLowerCase() === "tw elec");
   const gasIndex = header.findIndex((value) => value.toLowerCase() === "tw gas");
@@ -132,7 +132,7 @@ function parseAiLog(rows, fileName) {
 function parseStandardLog(rows, fileName) {
   const headerIndex = rows.findIndex((row) => row.some((value) => /^prev\.?\s*week/i.test(String(value || "").trim())));
   if (headerIndex < 0) return [];
-  const header = rows[headerIndex].map((value) => String(value || "").trim());
+  const header = Array.from(rows[headerIndex], value => String(value ?? "").trim());
   const electricIndexes = header.map((value, index) => /^electric$/i.test(value) ? index : -1).filter((index) => index >= 0);
   const partialIndexes = header.map((value, index) => /^partials?$/i.test(value) ? index : -1).filter((index) => index >= 0);
   const totalElectricIndex = electricIndexes.at(-1);
@@ -166,8 +166,8 @@ export function parseProductionRows(rows, fileName) {
     const row=rows.find(row=>nameKeys(row[0]).some(key=>record.keys.includes(key)));
     const days=[];
     if(row && weekEnd) for(let day=0;day<7;day++){
-      const [e,g,p]=row.slice(start+day*3,start+day*3+3).map(value=>String(value??"").trim());
-      const numeric=value=>value!=="" && /^-?\d+(?:\.\d+)?$/.test(value.replace(/,/g,""));
+      const [e="",g="",p=""]=row.slice(start+day*3,start+day*3+3).map(value=>String(value??"").trim());
+      const numeric=value=>{const text=String(value??"").trim();return text!=="" && /^-?\d+(?:\.\d+)?$/.test(text.replace(/,/g,""));};
       const worked=numeric(e)||numeric(g), absent=/^x$/i.test(e)||/^x$/i.test(g);
       if(!worked&&!absent)continue;
       const electric=numeric(e)?number(e):0,gas=numeric(g)?number(g):0,partials=numeric(p)?number(p):0;
