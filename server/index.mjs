@@ -9,6 +9,7 @@ import { getAgents, appendAgent, updateAgent, deleteAgent, appendMissingAgents, 
 import { combineAgentsAndGaps, generateGroups, generateStoreGroups, generateWorkGroups, STORE_CATALOG } from "./logic.mjs";
 import { attachProductionLogs, attachTrainingProduction, expandAgentsFromProduction, productionRepDirectory } from "./production-csv.mjs";
 import { trainingWatch } from "./training.mjs";
+import { importProductionSheets, refreshProductionCache } from "./production-import.mjs";
 import { runDailyAutomation, isDailyAutomationRunning } from "../run.mjs";
 import { DEFAULT_OFFICE, OFFICES, canonicalOffice } from "../offices.mjs";
 
@@ -50,6 +51,12 @@ app.use("/api", (_req, res, next) => {
     "Surrogate-Control": "no-store",
   });
   next();
+});
+
+// Production APIs read Supabase snapshots, never local TSV files.
+app.use("/api", async (req, res, next) => {
+  if (!/^\/(bootstrap|production-reps|work-reps|training-watch|work-matchups|store-matchups|agents)(?:\/|$)/.test(req.path)) return next();
+  try { await refreshProductionCache(); next(); } catch (error) { next(error); }
 });
 
 // Real-time collaboration channel. Drag motion is kept in memory and relayed
@@ -748,6 +755,17 @@ app.post("/api/automation/run", requireApiKey, async (_req, res, next) => {
   } catch (error) { next(error); }
 });
 
+// Production-sheet imports run at both morning refresh times in Eastern time.
+for (const expression of ["30 8 * * *", "0 9 * * *"]) {
+  cron.schedule(expression, async () => {
+    try { const result=await importProductionSheets(); if(result.success)io.emit("production:updated",{at:new Date().toISOString()}); }
+    catch(error){console.error("[production-import] Morning refresh failed:",error.message);}
+  }, {timezone:"America/New_York",noOverlap:true});
+}
+app.post("/api/production-sync",requireAdmin,async (_req,res,next)=>{
+  try {const result=await importProductionSheets();if(result.success)io.emit("production:updated",{at:new Date().toISOString()});res.json(result);}catch(error){next(error);}
+});
+
 const dailyRunCron = process.env.DAILY_RUN_CRON || "30 11 * * *";
 const dailyRunTimezone = process.env.DAILY_RUN_TIMEZONE || "America/New_York";
 
@@ -776,5 +794,7 @@ app.use((error, _req, res, _next) => {
 httpServer.listen(port, "0.0.0.0", () => {
   console.log(`[server] ATMO API running at http://localhost:${port}`);
   console.log(`[server] Allowed origins: ${allowedOrigins.join(", ")}`);
+  console.log("[production-import] Scheduled at 8:30 AM and 9:00 AM America/New_York");
+  refreshProductionCache().catch(error=>console.error("[production-import] Initial Supabase load failed:",error.message));
   console.log(`[scheduler] Daily run: ${dailyRunCron} (${dailyRunTimezone})`);
 });

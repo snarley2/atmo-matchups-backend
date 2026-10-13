@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { OFFICES, canonicalOffice } from "../offices.mjs";
-import { attachTrainingProduction } from "../server/production-csv.mjs";
+import { attachTrainingProduction, setProductionLogRecords } from "../server/production-csv.mjs";
 import { trainingWatch } from "../server/training.mjs";
 
 test("all selectable offices retain separate identities", () => {
@@ -21,7 +21,8 @@ test("training filters offices, roles and recorded zero without losing unknown w
   assert.equal(trainingWatch(reps,{threshold:0}).length,1);
 });
 
-test("uploaded totals remain the baseline Sunday and Monday", () => {
+test("stored totals remain the baseline Sunday and Monday", () => {
+  setProductionLogRecords([{keys:["brennonhill"],sourceFile:"AI production log - 10.10.2026.sheet",weekElectric:24,weekGas:2}]);
   const agents=[{repKey:"test",repName:"Brennon Hill",office:"MADHAV MEHTA",repType:"New Rep"}];
   for (const day of ["2026-10-11", "2026-10-12"]) {
     const [rep] = attachTrainingProduction(agents,day);

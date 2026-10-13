@@ -1,27 +1,7 @@
 import crypto from "node:crypto";
 import { canonicalOffice } from "../offices.mjs";
-import fs from "node:fs";
-import path from "node:path";
-
-const productionDir = path.resolve(process.cwd(), process.env.PRODUCTION_LOG_DIR || "prod_logs");
-
-function parseDelimited(text, delimiter) {
-  const rows = [];
-  let row = [], field = "", quoted = false;
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text[index];
-    if (quoted) {
-      if (char === '"' && text[index + 1] === '"') { field += '"'; index += 1; }
-      else if (char === '"') quoted = false;
-      else field += char;
-    } else if (char === '"') quoted = true;
-    else if (char === delimiter) { row.push(field); field = ""; }
-    else if (char === "\n") { row.push(field.replace(/\r$/, "")); rows.push(row); row = []; field = ""; }
-    else field += char;
-  }
-  if (field || row.length) { row.push(field.replace(/\r$/, "")); rows.push(row); }
-  return rows;
-}
+let productionRecords = [];
+export function setProductionLogRecords(records) { productionRecords = records; }
 
 function number(value) {
   const parsed = Number(String(value ?? "").replace(/,/g, "").trim());
@@ -67,7 +47,7 @@ function nameAliases(value) {
 }
 
 function fileWeekEnd(fileName) {
-  const match = String(fileName).match(/(\d{1,2})[._-](\d{1,2})(?:[._-](\d{2,4}))?(?=\.tsv$)/i);
+  const match = String(fileName).match(/(\d{1,2})[._-](\d{1,2})(?:[._-](\d{2,4}))?(?=\.(?:tsv|sheet)$)/i);
   if (!match) return null;
   const year = Number(match[3] || 2026);
   const date = new Date(Date.UTC(year < 100 ? 2000 + year : year, Number(match[1])-1, Number(match[2])));
@@ -175,16 +155,25 @@ function parseStandardLog(rows, fileName) {
   });
 }
 
-export function getProductionLogRecords() {
-  if (!fs.existsSync(productionDir)) return [];
-  // Stores intentionally use TSV production logs only. Do not fall back to
-  // CSV files, WorkMyT data, or stored app performance.
-  const files = fs.readdirSync(productionDir).filter((name) => name.toLowerCase().endsWith(".tsv")).sort();
-  return files.flatMap((fileName) => {
-    const rows = parseDelimited(fs.readFileSync(path.join(productionDir, fileName), "utf8").replace(/^\uFEFF/, ""), "\t");
-    return productionOffice(fileName)==="CANYON TUMAN" ? parseNoctisLog(rows,fileName) : rows.some((row) => String(row[0] || "").trim().toLowerCase() === "rep name")
-      ? parseAiLog(rows, fileName)
-      : parseStandardLog(rows, fileName);
+export function getProductionLogRecords() { return productionRecords; }
+
+export function parseProductionRows(rows, fileName) {
+  const parsed = productionOffice(fileName)==="CANYON TUMAN" ? parseNoctisLog(rows,fileName) : rows.some(row=>String(row[0]||"").trim().toLowerCase()==="rep name") ? parseAiLog(rows,fileName) : parseStandardLog(rows,fileName);
+  const ai=rows.some(row=>String(row[0]||"").trim().toLowerCase()==="rep name");
+  const start=ai?3:1;
+  const weekEnd=fileWeekEnd(fileName);
+  return parsed.filter(record=>isProductionRepName(record.repName.replace(/[↑↓]/g,""))).map(record=>{
+    const row=rows.find(row=>nameKeys(row[0]).some(key=>record.keys.includes(key)));
+    const days=[];
+    if(row && weekEnd) for(let day=0;day<7;day++){
+      const [e,g,p]=row.slice(start+day*3,start+day*3+3).map(value=>String(value??"").trim());
+      const numeric=value=>value!=="" && /^-?\d+(?:\.\d+)?$/.test(value.replace(/,/g,""));
+      const worked=numeric(e)||numeric(g), absent=/^x$/i.test(e)||/^x$/i.test(g);
+      if(!worked&&!absent)continue;
+      const electric=numeric(e)?number(e):0,gas=numeric(g)?number(g):0,partials=numeric(p)?number(p):0;
+      days.push({date:new Date(weekEnd.getTime()-(6-day)*86400000).toISOString().slice(0,10),worked,electric,gas,partials,production:worked?(electric+partials)*40+gas*18:0});
+    }
+    return {...record,days};
   });
 }
 
