@@ -9,6 +9,9 @@ mock.module("../server/sheets.mjs",{namedExports:{getAgents:async()=>roster}});
 mock.module("../server/production-import.mjs",{namedExports:{refreshProductionCache:async()=>{},synchronizeRepIdentities:async()=>{migrations++}}});
 const {resolveRepLogin,registerRepLogin}=await import("../server/rep-login.mjs");
 setProductionLogRecords([
+ {repId:"CYD1-BXH-8448",repName:"Brennon Hill",repType:"Leader",keys:["brennonhill"],sourceFile:"AI production log - 10.10.2026.sheet"},
+ {repId:"CYD1-AXB-5555",repName:"Alex Brown",repType:"New Rep",keys:["alexbrown"],sourceFile:"AI production log - 10.10.2026.sheet"},
+ {repId:"CYD1-CXD-5555",repName:"Chris Davis",repType:"New Rep",keys:["chrisdavis"],sourceFile:"AI production log - 10.10.2026.sheet"},
  {repId:"CYD1-0012",repName:"Alex Taylor",repType:"New Rep",keys:["alextaylor"],sourceFile:"AI production log - 10.10.2026.sheet"},
  {repId:"R-1111",repName:"John Smith",repType:"Trainer",keys:["johnsmith"],sourceFile:"AI production log - 10.10.2026.sheet"},
  {repId:"R-2222",repName:"Jane Jones",repType:"New Rep",keys:["janejones"],sourceFile:"AI production log - 10.10.2026.sheet"},
@@ -43,4 +46,13 @@ test("numeric login assumes CYD1 and preserves full IDs and leading zeros",async
  assert.deepEqual(await resolveRepLogin("cyd1-0012","MADHAV MEHTA"),numeric);
  assert.equal((await resolveRepLogin("MXM - 1324","MADHAV MEHTA")).generalAdmin,true);
  await assert.rejects(resolveRepLogin("1324","MADHAV MEHTA"),error=>error.status===404);
+});
+
+test("real production IDs accept initials or unique numeric suffix and reject duplicates",async()=>{
+ for(const id of ["BXH-8448","8448","CYD1-8448","CYD1-BXH-8448"]){
+  assert.equal((await resolveRepLogin(id,"MADHAV MEHTA")).repId,"CYD1-BXH-8448");
+ }
+ await assert.rejects(resolveRepLogin("5555","MADHAV MEHTA"),error=>error.status===409);
+ assert.equal((await resolveRepLogin("AXB-5555","MADHAV MEHTA")).repId,"CYD1-AXB-5555");
+ await assert.rejects(resolveRepLogin("8448","CANYON TUMAN"),error=>error.status===404);
 });

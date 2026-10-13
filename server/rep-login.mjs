@@ -9,11 +9,16 @@ const generalId=()=>normalizeRepId(process.env.GENERAL_ADMIN_REP_ID||"MXM-1324")
 const comparableId=value=>normalizeRepId(value).replace(/-/g,"");
 export async function resolveRepLogin(value,office){
  const enteredId=normalizeRepId(value);
- const repId=/^\d+$/.test(enteredId)?`CYD1-${enteredId}`:enteredId;
+ const repId=enteredId;
  if(!repId)throw Object.assign(new Error("Enter your production Rep ID."),{status:400});
  if(comparableId(repId)===comparableId(generalId()))return {repKey:generalId(),repId:generalId(),repName:"General Admin",repType:"Admin",office:canonicalOffice(office),isAdmin:true,generalAdmin:true};
  await refreshProductionCache();
- const records=getProductionLogRecords().filter(record=>validRepId(record.repId)&&comparableId(record.repId)===comparableId(repId)&&(!office||productionOffice(record.sourceFile)===canonicalOffice(office)));
+ const officeRecords=getProductionLogRecords().filter(record=>validRepId(record.repId)&&(!office||productionOffice(record.sourceFile)===canonicalOffice(office)));
+ let records=officeRecords.filter(record=>comparableId(record.repId)===comparableId(repId));
+ if(!records.length&&!repId.startsWith("CYD1-"))records=officeRecords.filter(record=>comparableId(record.repId)===comparableId(`CYD1-${repId}`));
+ const numericSuffix=repId.match(/^(?:CYD1-)?(\d+)$/)?.[1];
+ if(!records.length&&numericSuffix)records=officeRecords.filter(record=>normalizeRepId(record.repId).startsWith("CYD1-")&&normalizeRepId(record.repId).split("-").at(-1)===numericSuffix);
+ if(new Set(records.map(record=>comparableId(record.repId))).size>1)throw Object.assign(new Error("More than one rep has that ID number. Enter the initials and number after CYD1-, as shown in your production log."),{status:409});
  const offices=new Set(records.map(record=>productionOffice(record.sourceFile)));
  if(!records.length)throw Object.assign(new Error("Rep ID not found in the imported production sheets. Check your office or ask an admin to refresh production."),{status:404});
  if(offices.size!==1)throw Object.assign(new Error("This Rep ID appears in more than one office. Select your office."),{status:409});
@@ -22,7 +27,7 @@ export async function resolveRepLogin(value,office){
  if(identities.length>1&&!identities.every(record=>uniqueNameMatch([identities[0]],record.repName)))throw Object.assign(new Error("This Rep ID is assigned to different reps in the source sheets. Ask an admin to correct it."),{status:409});
  const dateKey=record=>{const match=record.sourceFile.match(/(\d{2})\.(\d{2})\.(\d{4})/);return match?`${match[3]}-${match[1]}-${match[2]}`:""};
  const newest=[...records].sort((a,b)=>dateKey(b).localeCompare(dateKey(a)))[0];
- const source={...productionRepDirectory().find(rep=>rep.office===selected&&comparableId(rep.repId)===comparableId(repId)),...newest};
+ const source={...productionRepDirectory().find(rep=>rep.office===selected&&comparableId(rep.repId)===comparableId(newest.repId)),...newest};
  const agents=(await getAgents()).filter(agent=>canonicalOffice(agent.office)===selected);
  const agent=agents.find(agent=>comparableId(agent.repKey)===comparableId(source.repId))||uniqueNameMatch(agents,source.repName);
  if(!agent&&agents.some(candidate=>nameScore(candidate.repName,source.repName)>=2))throw Object.assign(new Error("More than one roster identity matches this Rep ID. Ask an admin to resolve the names."),{status:409});
