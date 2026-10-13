@@ -705,6 +705,7 @@ app.post("/api/manual-numbers", async (req, res, next) => {
     const electric = number(req.body.electric);
     const electricPartial = number(req.body.electricPartial);
     const gas = number(req.body.gas);
+    const gasPartial = number(req.body.gasPartial);
     const now = new Date().toISOString();
     const saved = await upsertManualNumbers({
       id: crypto.randomUUID(),
@@ -721,7 +722,8 @@ app.post("/api/manual-numbers", async (req, res, next) => {
       electric,
       electricPartial,
       gas,
-      totalSales: electric + electricPartial + gas,
+      gasPartial,
+      totalSales: electric + electricPartial + gas + gasPartial,
       enteredBy: sanitizeLiveName(req.body.enteredBy || "Unknown"),
       createdAt: now,
       updatedAt: now,

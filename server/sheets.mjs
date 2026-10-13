@@ -559,7 +559,7 @@ const MANUAL_NUMBER_HEADERS = [
   "Entry ID", "Date", "Day", "Rep Key", "Rep Name", "Team",
   "Talks", "Stops", "Zips", "Presentations", "Info",
   "Electric Sales", "Electric Partials", "Gas Sales", "Total Sales",
-  "Entered By", "Created At", "Updated At"
+  "Entered By", "Created At", "Updated At", "Gas Partials"
 ];
 
 function cleanNumber(value) {
@@ -587,13 +587,14 @@ function manualObject(row = []) {
     enteredBy: String(row[15] || ""),
     createdAt: String(row[16] || ""),
     updatedAt: String(row[17] || ""),
+    gasPartial: cleanNumber(row[18]),
   };
 }
 
 export async function getManualNumbers() {
   const client = await sheetsClient();
   await ensureTab(client, manualNumbersTab, MANUAL_NUMBER_HEADERS);
-  const res = await client.spreadsheets.values.get({ spreadsheetId, range: `'${manualNumbersTab}'!A:R` });
+  const res = await client.spreadsheets.values.get({ spreadsheetId, range: `'${manualNumbersTab}'!A:S` });
   return (res.data.values || []).slice(1)
     .filter((row) => row.some((value) => String(value || "").trim()))
     .map(manualObject)
@@ -603,8 +604,9 @@ export async function getManualNumbers() {
 export async function upsertManualNumbers(entry) {
   const client = await sheetsClient();
   await ensureTab(client, manualNumbersTab, MANUAL_NUMBER_HEADERS);
-  const res = await client.spreadsheets.values.get({ spreadsheetId, range: `'${manualNumbersTab}'!A:R` });
+  const res = await client.spreadsheets.values.get({ spreadsheetId, range: `'${manualNumbersTab}'!A:S` });
   const values = res.data.values || [];
+  if(values[0]?.[18]!=="Gas Partials")await client.spreadsheets.values.update({spreadsheetId,range:`'${manualNumbersTab}'!S1`,valueInputOption:"RAW",requestBody:{values:[["Gas Partials"]]}});
   const rows = values.slice(1);
   const key = String(entry.repKey || "").trim();
   const name = String(entry.repName || "").trim().toLowerCase();
@@ -624,16 +626,16 @@ export async function upsertManualNumbers(entry) {
     normalized.id, normalized.date, normalized.day, normalized.repKey, normalized.repName, normalized.team,
     normalized.talks, normalized.stops, normalized.zips, normalized.presentations, normalized.info,
     normalized.electric, normalized.electricPartial, normalized.gas, normalized.totalSales,
-    normalized.enteredBy, normalized.createdAt, normalized.updatedAt,
+    normalized.enteredBy, normalized.createdAt, normalized.updatedAt, cleanNumber(normalized.gasPartial),
   ];
   if (matchIndex >= 0) {
     const sheetRow = matchIndex + 2;
     await client.spreadsheets.values.update({
-      spreadsheetId, range: `'${manualNumbersTab}'!A${sheetRow}:R${sheetRow}`, valueInputOption: "RAW", requestBody: { values: [row] },
+      spreadsheetId, range: `'${manualNumbersTab}'!A${sheetRow}:S${sheetRow}`, valueInputOption: "RAW", requestBody: { values: [row] },
     });
   } else {
     await client.spreadsheets.values.append({
-      spreadsheetId, range: `'${manualNumbersTab}'!A:R`, valueInputOption: "RAW", insertDataOption: "INSERT_ROWS", requestBody: { values: [row] },
+      spreadsheetId, range: `'${manualNumbersTab}'!A:S`, valueInputOption: "RAW", insertDataOption: "INSERT_ROWS", requestBody: { values: [row] },
     });
   }
   return normalized;
@@ -657,7 +659,7 @@ function manualRow(entry, officeByRepKey = new Map()) {
     "Rep Name": entry.repName, "Rep Key": entry.repKey,
     Office: canonicalOffice(officeByRepKey.get(entry.repKey) || DEFAULT_OFFICE),
     Talk: entry.talks, Stop: entry.stops, Zip: entry.zips, Presentation: entry.presentations, Info: entry.info,
-    "Electric Sales": entry.electric, "Electric Partials": entry.electricPartial, "Gas Sales": entry.gas,
+    "Electric Sales": entry.electric, "Electric Partials": entry.electricPartial, "Gas Sales": entry.gas, "Gas Partials": entry.gasPartial||0,
     Close: entry.electric + entry.electricPartial, "Data Source": "Manual", "Recorded Date": entry.date,
   };
 }
@@ -666,8 +668,8 @@ function sumManual(entries = [], officeByRepKey = new Map()) {
   for (const entry of entries) {
     const key = String(entry.repKey || entry.repName || "").trim().toLowerCase();
     if (!key) continue;
-    const current = byRep.get(key) || { ...entry, talks:0,stops:0,zips:0,presentations:0,info:0,electric:0,electricPartial:0,gas:0,totalSales:0 };
-    for (const field of ["talks","stops","zips","presentations","info","electric","electricPartial","gas","totalSales"]) current[field] += cleanNumber(entry[field]);
+    const current = byRep.get(key) || { ...entry, talks:0,stops:0,zips:0,presentations:0,info:0,electric:0,electricPartial:0,gas:0,gasPartial:0,totalSales:0 };
+    for (const field of ["talks","stops","zips","presentations","info","electric","electricPartial","gas","gasPartial","totalSales"]) current[field] += cleanNumber(entry[field]);
     if (entry.date > (current.date || "")) current.date = entry.date;
     byRep.set(key, current);
   }
