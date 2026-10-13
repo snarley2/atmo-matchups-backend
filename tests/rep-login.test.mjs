@@ -9,6 +9,7 @@ mock.module("../server/sheets.mjs",{namedExports:{getAgents:async()=>roster}});
 mock.module("../server/production-import.mjs",{namedExports:{refreshProductionCache:async()=>{},synchronizeRepIdentities:async()=>{migrations++}}});
 const {resolveRepLogin,registerRepLogin}=await import("../server/rep-login.mjs");
 setProductionLogRecords([
+ {repId:"CYD1-0012",repName:"Alex Taylor",repType:"New Rep",keys:["alextaylor"],sourceFile:"AI production log - 10.10.2026.sheet"},
  {repId:"R-1111",repName:"John Smith",repType:"Trainer",keys:["johnsmith"],sourceFile:"AI production log - 10.10.2026.sheet"},
  {repId:"R-2222",repName:"Jane Jones",repType:"New Rep",keys:["janejones"],sourceFile:"AI production log - 10.10.2026.sheet"},
 ]);
@@ -34,4 +35,12 @@ test("saved rep session restores identity and never trusts a submitted role",asy
   const restored=await fetch(base+"/api/auth/rep/me",{headers:{Authorization:"Bearer "+session.token}});assert.equal(restored.status,200);assert.equal((await restored.json()).user.repId,"R-2222");
   assert.equal((await fetch(base+"/api/auth/rep/me")).status,401);
  }finally{await new Promise(resolve=>server.close(resolve));}
+});
+
+test("numeric login assumes CYD1 and preserves full IDs and leading zeros",async()=>{
+ const numeric=await resolveRepLogin(" 0012 ","MADHAV MEHTA");
+ assert.equal(numeric.repId,"CYD1-0012");assert.equal(numeric.isAdmin,false);
+ assert.deepEqual(await resolveRepLogin("cyd1-0012","MADHAV MEHTA"),numeric);
+ assert.equal((await resolveRepLogin("MXM - 1324","MADHAV MEHTA")).generalAdmin,true);
+ await assert.rejects(resolveRepLogin("1324","MADHAV MEHTA"),error=>error.status===404);
 });

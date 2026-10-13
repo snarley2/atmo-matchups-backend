@@ -8,7 +8,8 @@ import {normalizeRepId,validRepId,uniqueNameMatch,nameScore,adminRole} from "./r
 const generalId=()=>normalizeRepId(process.env.GENERAL_ADMIN_REP_ID||"MXM-1324");
 const comparableId=value=>normalizeRepId(value).replace(/-/g,"");
 export async function resolveRepLogin(value,office){
- const repId=normalizeRepId(value);
+ const enteredId=normalizeRepId(value);
+ const repId=/^\d+$/.test(enteredId)?`CYD1-${enteredId}`:enteredId;
  if(!repId)throw Object.assign(new Error("Enter your production Rep ID."),{status:400});
  if(comparableId(repId)===comparableId(generalId()))return {repKey:generalId(),repId:generalId(),repName:"General Admin",repType:"Admin",office:canonicalOffice(office),isAdmin:true,generalAdmin:true};
  await refreshProductionCache();
