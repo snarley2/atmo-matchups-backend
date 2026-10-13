@@ -63,6 +63,7 @@ export async function syncProductionIdentities(connection,records){
   const migrated=migrateIdentityRows(result.rows,records);
   for(const tab of migrated.tabs){const old=result.rows.find(row=>row.title===tab.title);if(JSON.stringify(old.rows)!==JSON.stringify(tab.rows))await connection.query("UPDATE public.project_tabs SET rows=$2::jsonb,revision=revision+1,updated_at=now() WHERE title=$1",[tab.title,JSON.stringify(tab.rows)]);}
   const definitions=[
+   {table:"rep_store_preferences",columns:"office,rep_key,store_ids,updated_at",tail:"store_ids,updated_at"},
    {table:"coaching_rep_methods",columns:"office,rep_key,method_id,implemented,updated_at,updated_by",tail:"method_id,implemented,updated_at,updated_by"},
    {table:"production_weekly_reps",columns:"office,rep_key,rep_name,week_end,electric,gas,production,imported_at",tail:"rep_name,week_end,electric,gas,production,imported_at"},
    {table:"production_days",columns:"office,rep_key,rep_name,work_date,worked,electric,gas,partials,production,imported_at",tail:"rep_name,work_date,worked,electric,gas,partials,production,imported_at"},

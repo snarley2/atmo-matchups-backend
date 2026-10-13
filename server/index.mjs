@@ -9,6 +9,7 @@ import { getAgents, appendAgent, updateAgent, deleteAgent, appendMissingAgents, 
 import { combineAgentsAndGaps, generateGroups, generateStoreGroups, generateWorkGroups, STORE_CATALOG } from "./logic.mjs";
 import { attachProductionLogs, attachTrainingProduction, expandAgentsFromProduction, productionRepDirectory } from "./production-csv.mjs";
 import { registerCoachingRoutes } from "./coaching-routes.mjs";
+import {registerStorePreferenceRoutes} from "./store-preference-routes.mjs";
 import {registerRepLogin,resolveRepLogin} from "./rep-login.mjs";
 import { trainingWatch, attachFocusChecklist } from "./training.mjs";
 import { trainingCoaching } from "./coaching-store.mjs";
@@ -590,6 +591,8 @@ app.post("/api/work-matchups", requireAdmin, async (req, res, next) => {
     res.json(saved);
   } catch (error) { next(error); }
 });
+
+registerStorePreferenceRoutes(app,{requireAdmin,resolveRepLogin,getAgents,expandAgentsFromProduction,getWorkMatchups,catalog:STORE_CATALOG,io,today:()=>easternDateParts().date});
 
 app.get("/api/store-matchups/catalog", (_req, res) => {
   res.json({ stores: STORE_CATALOG });
