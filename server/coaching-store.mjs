@@ -56,6 +56,13 @@ export async function repChecklist(office,repKey){
     WHERE m.office=$1 AND m.active=true ORDER BY m.created_at,m.id`,[office,repKey]);
   return result.rows.map(row=>({...method(row),implemented:row.implemented,checkedAt:row.checked_at,updatedBy:row.updated_by}));
 }
+export async function trainingCoaching(office,repKeys){
+  if(!repKeys.length)return {methods:[],checks:[]};
+  const methods=(await listMethods(office)).filter(method=>method.active);
+  const result=await (await db()).query(`SELECT rep_key,method_id,implemented,updated_at,updated_by
+    FROM public.coaching_rep_methods WHERE office=$1 AND rep_key=ANY($2::text[])`,[office,repKeys]);
+  return {methods,checks:result.rows.map(row=>({repKey:row.rep_key,methodId:row.method_id,implemented:row.implemented,updatedAt:row.updated_at,updatedBy:row.updated_by}))};
+}
 export async function setRepMethod(office,repKey,methodId,implemented,actor){
   if(typeof implemented!=="boolean")throw Object.assign(new Error("Implemented must be true or false."),{status:400});
   // Office/active checks are part of the write, including concurrent archiving.

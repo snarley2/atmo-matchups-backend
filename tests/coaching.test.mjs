@@ -17,6 +17,7 @@ class Pool {
   }
   if(sql.startsWith("SELECT * FROM public.coaching_methods"))return {rows:[...methods.values()].filter(row=>row.office===args[0])};
   if(sql.startsWith("SELECT m.*"))return {rows:[...methods.values()].filter(row=>row.office===args[0]&&row.active).map(row=>({...row,implemented:false,...checks.get(`${args[0]}|${args[1]}|${row.id}`)}))};
+  if(sql.startsWith("SELECT rep_key,method_id"))return {rows:[...checks].flatMap(([key,row])=>{const [office,rep_key,method_id]=key.split("|");return office===args[0]&&args[1].includes(rep_key)?[{rep_key,method_id,...row}]:[]})};
   if(sql.startsWith("INSERT INTO public.coaching_rep_methods")){
    const [office,repKey,id,implemented,actor]=args,row=methods.get(id);if(!row||row.office!==office||!row.active)return {rows:[]};
    const saved={implemented,updated_at:new Date().toISOString(),updated_by:actor};checks.set(`${office}|${repKey}|${id}`,saved);return {rows:[saved]};
@@ -28,7 +29,7 @@ class Pool {
 mock.module("pg",{defaultExport:{Pool}});
 process.env.SUPABASE_DB_URL="postgres://test-only";
 const {registerCoachingRoutes}=await import("../server/coaching-routes.mjs");
-const {closeCoachingDatabase}=await import("../server/coaching-store.mjs");
+const {closeCoachingDatabase,trainingCoaching}=await import("../server/coaching-store.mjs");
 
 test("method management and rep checks preserve office, rep, authentication and archive boundaries",async()=>{
  const app=express();app.use(express.json());
@@ -54,6 +55,12 @@ test("method management and rep checks preserve office, rep, authentication and 
   assert.equal((await call("/api/coaching-checklist/one")).data.methods[0].implemented,false);
   assert.equal((await call(`/api/coaching-checklist/one/${id}`,{implemented:true},"PUT")).data.updatedBy,"Test Coach");
   assert.equal((await call("/api/coaching-checklist/one")).data.methods[0].implemented,true);
+  const training=await trainingCoaching("MADHAV MEHTA",["one","two"]);
+  assert.equal(training.methods.length,1);
+  assert.equal(training.checks.length,1);
+  assert.equal(training.checks[0].repKey,"one");
+  assert.equal(training.checks[0].implemented,true);
+  assert.equal((await trainingCoaching("CANYON TUMAN",["one"])).checks.length,0);
   assert.equal((await call("/api/coaching-checklist/two")).data.methods[0].implemented,false);
   assert.equal((await call(`/api/coaching-checklist/other/${id}`,{office:"CANYON TUMAN",implemented:true},"PUT")).status,404);
   assert.equal((await call("/api/coaching-checklist/other?office=MADHAV%20MEHTA")).status,404);

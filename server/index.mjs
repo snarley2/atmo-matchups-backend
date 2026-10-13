@@ -9,7 +9,8 @@ import { getAgents, appendAgent, updateAgent, deleteAgent, appendMissingAgents, 
 import { combineAgentsAndGaps, generateGroups, generateStoreGroups, generateWorkGroups, STORE_CATALOG } from "./logic.mjs";
 import { attachProductionLogs, attachTrainingProduction, expandAgentsFromProduction, productionRepDirectory } from "./production-csv.mjs";
 import { registerCoachingRoutes } from "./coaching-routes.mjs";
-import { trainingWatch } from "./training.mjs";
+import { trainingWatch, attachFocusChecklist } from "./training.mjs";
+import { trainingCoaching } from "./coaching-store.mjs";
 import { importProductionSheets, refreshProductionCache } from "./production-import.mjs";
 import { runDailyAutomation, isDailyAutomationRunning } from "../run.mjs";
 import { DEFAULT_OFFICE, OFFICES, canonicalOffice } from "../offices.mjs";
@@ -512,7 +513,9 @@ app.get("/api/training-watch", requireAdmin, async (req, res, next) => {
     const [agents, gaps, performance] = await Promise.all([getAgents(), getGaps(), getPerformanceTabs()]);
     const scoped = agentsForOffice(expandAgentsFromProduction(agents), office);
     const combined = combineAgentsAndGaps(attachTrainingProduction(scoped), gaps, performance);
-    res.json({office, mode, threshold, reps:trainingWatch(combined, {office, mode, threshold})});
+    const reps=trainingWatch(combined,{office,mode,threshold});
+    const coaching=await trainingCoaching(office,reps.map(rep=>String(rep.repKey)));
+    res.json({office,mode,threshold,reps:attachFocusChecklist(reps,coaching)});
   } catch (error) { next(error); }
 });
 

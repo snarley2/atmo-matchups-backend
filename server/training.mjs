@@ -1,5 +1,27 @@
 import { canonicalOffice } from "../offices.mjs";
 
+export function focusGapKey(value){
+  const text=String(value||"").toLowerCase();
+  if(/talk.*stop/.test(text))return "talkToStop";
+  if(/stop.*zip/.test(text))return "stopToZip";
+  if(/zip.*pres/.test(text))return "zipToPresentation";
+  if(/pres.*info/.test(text))return "presentationToInfo";
+  if(/info.*close/.test(text))return "infoToClose";
+  return null;
+}
+export function attachFocusChecklist(reps,{methods=[],checks=[]}={}){
+  const byRepMethod=new Map(checks.map(check=>[`${check.repKey}|${check.methodId}`,check]));
+  return reps.map(rep=>{
+    const gapKey=focusGapKey(rep.focus);
+    if(!gapKey)return {...rep,focusChecklist:null};
+    const points=methods.filter(method=>method.active&&method.gapKey===gapKey&&canonicalOffice(method.office)===canonicalOffice(rep.office)).map(method=>{
+      const check=byRepMethod.get(`${rep.repKey}|${method.id}`);
+      return {id:method.id,title:method.title,details:method.details,implemented:check?.implemented===true,updatedAt:check?.updatedAt||null,updatedBy:check?.updatedBy||null};
+    });
+    return {...rep,focusChecklist:{gapKey,total:points.length,excelsAt:points.filter(point=>point.implemented),needsWork:points.filter(point=>!point.implemented)}};
+  });
+}
+
 // Roles come from Attendance. Missing production is shown for coaching review,
 // rather than silently treating an unknown week as recorded zero sales.
 export function trainingWatch(agents, { office, mode = "both", threshold = 20 } = {}) {
