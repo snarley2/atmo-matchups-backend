@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
+import {normalizeRepId,validRepId,uniqueNameMatch,nameScore,productionRole} from "./rep-identity.mjs";
 import { canonicalOffice } from "../offices.mjs";
+const productionId=value=>validRepId(value)?normalizeRepId(value):"";
 let productionRecords = [];
 export function setProductionLogRecords(records) { productionRecords = records; }
 
@@ -97,7 +99,7 @@ function parseNoctisLog(rows,fileName) {
     if(!keys.length || !/[a-z]{2,}.*[a-z]{2,}/i.test(repName) || /^(total|electric|team|gas|week)/i.test(repName))return [];
     const lastDay=dailyResult(row,1,fileName);
     const e=totalE>=0?weeklyElectric(row[totalE]):null,g=totalG>=0?number(row[totalG]):0;
-    return [{repName,repType:/\((?:PL|L|OWNER)\)\s*$/i.test(raw)?"Leader":"New Rep",keys,aliases:nameAliases(repName),sourceFile:fileName,lastWeek:weeklyElectric(row[header.findIndex(x=>/^LW T El$/i.test(String(x||"")))]),twoWeeksAgo:null,
+    return [{repName,repId:(header.findIndex(value=>/^rep\s*id$|^agent\s*id$/i.test(String(value||"")))>=0?productionId(row[header.findIndex(value=>/^rep\s*id$|^agent\s*id$/i.test(String(value||"")))]):""),repType:productionRole(raw.match(/\(([^)]+)\)\s*$/)?.[1]),keys,aliases:nameAliases(repName),sourceFile:fileName,lastWeek:weeklyElectric(row[header.findIndex(x=>/^LW T El$/i.test(String(x||"")))]),twoWeeksAgo:null,
       lastDay,electric:lastDay?.electric||0,gas:lastDay?.gas||0,partials:lastDay?.partials||0,
       current:lastDay?.production||0,overall:lastDay?.production||0,production:lastDay?.production||0,
       weekElectric:e,weekGas:totalG>=0?weeklyElectric(row[totalG]):null,lastWeekGas:weeklyElectric(row[header.findIndex(x=>/^LW T Gas$/i.test(String(x||"")))])}];
@@ -109,6 +111,7 @@ function parseAiLog(rows, fileName) {
   if (headerIndex < 0) return [];
   const header = Array.from(rows[headerIndex], value => String(value ?? "").trim());
   const detail = rows[headerIndex + 1] || [];
+  const repIdIndex = header.findIndex(value=>/^rep\s*id$|^agent\s*id$/i.test(value));
   const currentIndex = header.findIndex((value) => value.toLowerCase() === "tw elec");
   const gasIndex = header.findIndex((value) => value.toLowerCase() === "tw gas");
   const lastIndex = header.findIndex((value) => value.toLowerCase() === "lw elec");
@@ -125,7 +128,7 @@ function parseAiLog(rows, fileName) {
     const production = (electric + partials) * 40 + gas * 18;
     const lastWeek = lastIndex >= 0 && String(row[lastIndex] || "").trim() !== "" ? weeklyElectric(row[lastIndex]) : null;
     const twoWeeksAgo = twoIndex >= 0 && String(row[twoIndex] || "").trim() !== "" ? number(row[twoIndex]) : null;
-    return [datedRecord({ repName: repName.replace(/[↓↑]/g, "").trim(), repType: String(row[1]||"New Rep").trim(), keys, aliases: nameAliases(repName), current: production, electric, gas, production, lastWeek, twoWeeksAgo, overall: production, partials, sourceFile: fileName, weekElectric: currentIndex >= 0 ? weeklyElectric(row[currentIndex]) : null, weekGas:gasIndex>=0?weeklyElectric(row[gasIndex]):null, lastWeekGas:weeklyElectric(row[header.findIndex(value=>value.toLowerCase()==="lw gas")]) },row,3,fileName)];
+    return [datedRecord({ repName: repName.replace(/[↓↑]/g, "").trim(), repId:repIdIndex>=0?productionId(row[repIdIndex]):"", repType: productionRole(row[1]), keys, aliases: nameAliases(repName), current: production, electric, gas, production, lastWeek, twoWeeksAgo, overall: production, partials, sourceFile: fileName, weekElectric: currentIndex >= 0 ? weeklyElectric(row[currentIndex]) : null, weekGas:gasIndex>=0?weeklyElectric(row[gasIndex]):null, lastWeekGas:weeklyElectric(row[header.findIndex(value=>value.toLowerCase()==="lw gas")]) },row,3,fileName)];
   });
 }
 
@@ -138,6 +141,8 @@ function parseStandardLog(rows, fileName) {
   const totalElectricIndex = electricIndexes.at(-1);
   const gasIndexes = header.map((value, index) => /^gas$/i.test(value) ? index : -1).filter((index) => index >= 0);
   const totalGasIndex = gasIndexes.at(-1);
+  const repIdIndex = header.findIndex(value=>/^rep\s*id$|^agent\s*id$/i.test(value));
+  const roleIndex = header.findIndex(value=>/^position$|^role$|^rep\s*type$/i.test(value));
   const prevIndex = header.findIndex((value) => /^prev\.?\s*week/i.test(value));
   const twoIndex = header.findIndex((value) => /^2\s*wk/i.test(value));
   return rows.slice(headerIndex + 1).flatMap((row) => {
@@ -151,7 +156,7 @@ function parseStandardLog(rows, fileName) {
     const production = (electric + partials) * 40 + gas * 18;
     const lastWeek = prevIndex >= 0 ? weeklyElectric(row[prevIndex]) : null;
     const twoWeeksAgo = twoIndex >= 0 ? weeklyElectric(row[twoIndex]) : null;
-    return [datedRecord({ repName, keys, aliases: nameAliases(repName), current: production, electric, gas, production, lastWeek, twoWeeksAgo, overall: production, partials, sourceFile: fileName, weekElectric: Number.isInteger(totalElectricIndex) ? weeklyElectric(row[totalElectricIndex]) : null, weekGas:Number.isInteger(totalGasIndex)?weeklyElectric(row[totalGasIndex]):null, lastWeekGas:prevIndex>=0?weeklyGasPair(row[prevIndex]):null },row,1,fileName)];
+    return [datedRecord({ repName, repId:repIdIndex>=0?productionId(row[repIdIndex]):"",repType:productionRole(roleIndex>=0?row[roleIndex]:repName.match(/\(([^)]+)\)\s*$/)?.[1]), keys, aliases: nameAliases(repName), current: production, electric, gas, production, lastWeek, twoWeeksAgo, overall: production, partials, sourceFile: fileName, weekElectric: Number.isInteger(totalElectricIndex) ? weeklyElectric(row[totalElectricIndex]) : null, weekGas:Number.isInteger(totalGasIndex)?weeklyElectric(row[totalGasIndex]):null, lastWeekGas:prevIndex>=0?weeklyGasPair(row[prevIndex]):null },row,1,fileName)];
   });
 }
 
@@ -180,22 +185,16 @@ export function parseProductionRows(rows, fileName) {
 export function attachProductionLogs(agents = []) {
   const records = getProductionLogRecords();
   const byName = new Map();
-  const aliasBuckets = new Map();
   for (const record of records) for (const key of record.keys) {
     const existing = byName.get(`${productionOffice(record.sourceFile)}|${key}`);
     if (!existing || String(record.lastDay?.date||"") > String(existing.lastDay?.date||"")) byName.set(`${productionOffice(record.sourceFile)}|${key}`, record);
   }
-  for (const record of records) for (const alias of record.aliases || []) {
-    if (!aliasBuckets.has(alias)) aliasBuckets.set(alias, []);
-    aliasBuckets.get(alias).push(record);
-  }
-  const uniqueAliases = new Map([...aliasBuckets].flatMap(([alias,matches])=>{
-    const byOffice=new Map();for(const r of matches){const office=productionOffice(r.sourceFile);const old=byOffice.get(office);if(!old||String(r.lastDay?.date||"")>String(old.lastDay?.date||""))byOffice.set(office,r);}
-    return [...byOffice].map(([office,record])=>[`${office}|${alias}`,record]);
-  }));
   return agents.map((agent) => {
-    const record = nameKeys(agent.repName).map((key) => byName.get(`${canonicalOffice(agent.office)}|${key}`)).find(Boolean) || nameAliases(agent.repName).map((key) => uniqueAliases.get(`${canonicalOffice(agent.office)}|${key}`)).find(Boolean);
-    return { ...agent, productionLog: record ? {
+    const officeRecords=records.filter(record=>productionOffice(record.sourceFile)===canonicalOffice(agent.office));
+    const byId=officeRecords.filter(record=>record.repId&&normalizeRepId(record.repId)===normalizeRepId(agent.repKey)).sort((a,b)=>String(b.lastDay?.date||"").localeCompare(String(a.lastDay?.date||"")))[0];
+    const names=new Map();for(const row of officeRecords){const key=row.keys.at(-1),old=names.get(key);if(!old||String(row.lastDay?.date||"")>String(old.lastDay?.date||""))names.set(key,row);}
+    const record = byId || nameKeys(agent.repName).map((key) => byName.get(`${canonicalOffice(agent.office)}|${key}`)).find(Boolean) || uniqueNameMatch([...names.values()],agent.repName);
+    return { ...agent, productionRepId:record?.repId||"", productionLog: record ? {
       current: record.current,
       electric: record.electric,
       gas: record.gas,
@@ -241,7 +240,7 @@ export function productionRepDirectory() {
     if (!isProductionRepName(repName)) continue;
     const key = `${office}|${nameKeys(repName).at(-1) || repName.toLowerCase()}`;
     const entry = { ...record, office, repName,
-      repKey: `prod-${crypto.createHash("sha256").update(key).digest("hex").slice(0,24)}`,
+      repKey: record.repId || `prod-${crypto.createHash("sha256").update(key).digest("hex").slice(0,24)}`,
       repType: record.repType || "New Rep", team: "", teamLead: "", trainer: "", attendance: "in",
       productionLog: {current:record.current, electric:record.electric,gas:record.gas,
         production:record.production,lastDay:record.lastDay,sourceFile:record.sourceFile}
@@ -262,12 +261,12 @@ export function expandAgentsFromProduction(agents = []) {
   const discovered = [];
   for (const rep of productionRepDirectory()) {
     const keys = identities(rep);
-    if (!keys.length || keys.some((key) => existing.has(key))) continue;
+    if (!keys.length || keys.some((key) => existing.has(key)) || agents.some(agent=>canonicalOffice(agent.office)===canonicalOffice(rep.office)&&nameScore(agent.repName,rep.repName)>=2)) continue;
     discovered.push({
       repKey: rep.repKey,
       repName: rep.repName,
       office: canonicalOffice(rep.office),
-      repType: "New Rep", // provisional only; never replace existing Attendance roles
+      repType: rep.repType||"New Rep", // provisional only; existing Attendance roles remain unchanged
       team: "", teamLead: "", trainer: "", attendance: "in",
       experienceLevel: "",
       productionLog: rep.productionLog,
@@ -288,7 +287,10 @@ export function attachTrainingProduction(agents = [], today = new Intl.DateTimeF
   return agents.map(agent => {
     const officeRecords = dated.filter(record => productionOffice(record.sourceFile) === canonicalOffice(agent.office));
     const keys = nameKeys(agent.repName);
-    const matching = officeRecords.filter(record => record.keys.some(key => keys.includes(key)));
+    const direct=officeRecords.filter(record=>record.repId&&normalizeRepId(record.repId)===normalizeRepId(agent.repKey));
+    const candidates=[...new Map(officeRecords.map(record=>[record.repId||record.keys.at(-1),record])).values()];
+    const matched=uniqueNameMatch(candidates,agent.repName);
+    const matching = direct.length?direct:officeRecords.filter(record => record.keys.some(key => keys.includes(key)) || (matched&&record.keys.at(-1)===matched.keys.at(-1)));
     const current = matching.find(record => record.weekEnd === currentEnd);
     // Choose the office's week, not a different old week for each missing rep.
     const availableEnd = officeRecords.filter(record => record.weekEnd <= previousEnd).map(record => record.weekEnd).sort().at(-1);

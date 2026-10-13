@@ -1,6 +1,7 @@
 import process from "node:process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {uniqueNameMatch,nameScore} from "./server/rep-identity.mjs";
 import crypto from "node:crypto";
 import dotenv from "dotenv";
 import { supabaseSheetsClient, closeSupabase } from "./server/supabase-sheets-client.mjs";
@@ -183,7 +184,9 @@ for (const row of sourceRows) {
   const office = canonicalOffice(valueAt(row, officeIndex) || FALLBACK_OFFICE);
   const key = officeRecordKey(repName, office);
 
-  if (!normalize(repName) || existingNames.has(key) || seenSourceNames.has(key)) {
+  const officeRows=existingRows.filter(row=>canonicalOffice(valueAt(row,findHeaderIndex(agentsHeaders,["office","campaign"]))||FALLBACK_OFFICE)===office);
+  const resemblesExisting=officeRows.some(row=>nameScore(repName,row[existingRepNameIndex])>=2);
+  if (!normalize(repName) || existingNames.has(key) || seenSourceNames.has(key) || resemblesExisting) {
     continue;
   }
 

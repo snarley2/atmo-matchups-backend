@@ -3,8 +3,9 @@ import path from "node:path";
 import crypto from "node:crypto";
 import {google} from "googleapis";
 import pg from "pg";
+import {syncProductionIdentities} from "./identity-migration.mjs";
 import {PRODUCTION_SOURCES} from "../production-sources.mjs";
-import {parseProductionRows,setProductionLogRecords} from "./production-csv.mjs";
+import {parseProductionRows,setProductionLogRecords,getProductionLogRecords,productionOffice} from "./production-csv.mjs";
 
 let pool, schemaReady, refreshPromise, importedAt=0, inFlight;
 const LOCK="atmo-production-import";
@@ -64,6 +65,13 @@ export async function fetchProductionSnapshots(client,today=easternDate()){
       const range=`'${tab.title.replace(/'/g,"''")}'!A:AZ`;
       const response=await client.spreadsheets.values.get({spreadsheetId:source.spreadsheetId,range,valueRenderOption:"UNFORMATTED_VALUE"},{timeout:30000});
       const rows=response.data.values||[];
+      const idHeader=rows.find(row=>row.some(cell=>/^rep\s*id$|^agent\s*id$/i.test(String(cell||"").trim())));
+      if(idHeader){
+        const idColumn=idHeader.findIndex(cell=>/^rep\s*id$|^agent\s*id$/i.test(String(cell||"").trim()));
+        let number=idColumn+1,letters="";while(number){number--;letters=String.fromCharCode(65+number%26)+letters;number=Math.floor(number/26);}
+        const formatted=await client.spreadsheets.values.get({spreadsheetId:source.spreadsheetId,range:`'${tab.title.replace(/'/g,"''")}'!${letters}:${letters}`,valueRenderOption:"FORMATTED_VALUE"},{timeout:30000});
+        for(let i=0;i<rows.length;i++)if(formatted.data.values?.[i]?.[0]!==undefined)rows[i][idColumn]=String(formatted.data.values[i][0]);
+      }
       const fileName=`${source.prefix} - ${tab.weekEnd.slice(5,7)}.${tab.weekEnd.slice(8,10)}.${tab.weekEnd.slice(0,4)}.sheet`;
       const records=parseProductionRows(rows,fileName);
       if(!records.length)throw new Error(`${source.office} / ${tab.title}: no valid reps found; keeping stored production`);
@@ -72,7 +80,7 @@ export async function fetchProductionSnapshots(client,today=easternDate()){
   }
   return snapshots;
 }
-function repIdentity(office,record){return "prod-"+crypto.createHash("sha256").update(`${office}|${record.keys.at(-1)}`).digest("hex").slice(0,24);}
+function repIdentity(office,record){return record.repId || "prod-"+crypto.createHash("sha256").update(`${office}|${record.keys.at(-1)}`).digest("hex").slice(0,24);}
 export async function saveProductionSnapshots(connection,snapshots){
   await connection.query("BEGIN");
   try{
@@ -111,11 +119,18 @@ export async function importProductionSheets(){
     if(!locked)return {skipped:true,reason:"another server is importing"};
     const snapshots=await fetchProductionSnapshots(sheetsClient());
     await saveProductionSnapshots(connection,snapshots);await refreshProductionCache(true);
+    await syncProductionIdentities(connection,getProductionLogRecords().map(record=>({...record,office:productionOffice(record.sourceFile),weekEnd:productionWeekEnd(record.sourceFile.match(/(\d{2}\.\d{2}\.\d{4})/)?.[1])})));
     console.log(`[production-import] Stored ${snapshots.length} office/week snapshots in Supabase`);
     return {success:true,weeks:snapshots.length,reps:snapshots.reduce((sum,snapshot)=>sum+snapshot.records.length,0)};
   }finally{
     if(locked)await connection.query("SELECT pg_advisory_unlock(hashtext($1))",[LOCK]).catch(()=>{});
     connection?.release();inFlight=false;
   }
+}
+export async function synchronizeRepIdentities(){
+  await refreshProductionCache();
+  const connection=await database().connect();
+  try{return await syncProductionIdentities(connection,getProductionLogRecords().map(record=>({...record,office:productionOffice(record.sourceFile),weekEnd:record.sourceFile.match(/(\d{4})\.sheet$/)?.[1]+"-"+record.sourceFile.match(/(\d{2})\.(\d{2})\.\d{4}/)?.slice(1).join("-")})));}
+  finally{connection.release();}
 }
 export async function closeProductionDatabase(){if(pool)await pool.end();pool=undefined;schemaReady=null;importedAt=0;}

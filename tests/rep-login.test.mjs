@@ -1,0 +1,37 @@
+import {test,mock} from "node:test";
+import assert from "node:assert/strict";
+import express from "express";
+import {setProductionLogRecords} from "../server/production-csv.mjs";
+
+const roster=[{repKey:"uuid-one",repName:"John Michael Smith",office:"MADHAV MEHTA",repType:"New Rep",trainer:"Jane Coach"},{repKey:"R-2222",repName:"Jane Jones",office:"MADHAV MEHTA",repType:"New Rep"}];
+let migrations=0;
+mock.module("../server/sheets.mjs",{namedExports:{getAgents:async()=>roster}});
+mock.module("../server/production-import.mjs",{namedExports:{refreshProductionCache:async()=>{},synchronizeRepIdentities:async()=>{migrations++}}});
+const {resolveRepLogin,registerRepLogin}=await import("../server/rep-login.mjs");
+setProductionLogRecords([
+ {repId:"R-1111",repName:"John Smith",repType:"Trainer",keys:["johnsmith"],sourceFile:"AI production log - 10.10.2026.sheet"},
+ {repId:"R-2222",repName:"Jane Jones",repType:"New Rep",keys:["janejones"],sourceFile:"AI production log - 10.10.2026.sheet"},
+]);
+
+test("production ID login resolves personal identity, trainers and general admin",async()=>{
+ const trainer=await resolveRepLogin(" r-1111 ","MADHAV MEHTA");
+ assert.equal(trainer.repKey,"R-1111");assert.equal(trainer.repName,"John Michael Smith");assert.equal(trainer.isAdmin,true);
+ assert.equal((await resolveRepLogin("R-2222","MADHAV MEHTA")).isAdmin,false);
+ assert.equal((await resolveRepLogin("mxm - 1324","MADHAV MEHTA")).generalAdmin,true);
+ await assert.rejects(resolveRepLogin("missing","MADHAV MEHTA"),error=>error.status===404);
+ await assert.rejects(resolveRepLogin("R-1111","CANYON TUMAN"),error=>error.status===404);
+ assert.equal(roster[0].trainer,"Jane Coach");
+});
+
+test("saved rep session restores identity and never trusts a submitted role",async()=>{
+ const app=express();app.use(express.json());const issued=new Map();
+ registerRepLogin(app,{bearerToken:req=>req.headers.authorization?.replace("Bearer ",""),verifySessionToken:token=>issued.get(token),issueSessionToken:user=>{const token="signed-"+user.repId;issued.set(token,{kind:"rep",repKey:user.repKey,repId:user.repId,office:user.office});return token}});
+ app.use((error,req,res,next)=>res.status(error.status||500).json({error:error.message}));
+ const server=app.listen(0,"127.0.0.1");await new Promise(resolve=>server.once("listening",resolve));const base=`http://127.0.0.1:${server.address().port}`;
+ try{
+  const response=await fetch(base+"/api/auth/rep",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({repId:"R-2222",office:"MADHAV MEHTA",isAdmin:true,role:"Owner"})});
+  assert.equal(response.status,200);const session=await response.json();assert.equal(session.user.isAdmin,false);assert.equal(migrations,1);
+  const restored=await fetch(base+"/api/auth/rep/me",{headers:{Authorization:"Bearer "+session.token}});assert.equal(restored.status,200);assert.equal((await restored.json()).user.repId,"R-2222");
+  assert.equal((await fetch(base+"/api/auth/rep/me")).status,401);
+ }finally{await new Promise(resolve=>server.close(resolve));}
+});

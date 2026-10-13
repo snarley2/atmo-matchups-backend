@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import {uniqueNameMatch,nameScore} from "./rep-identity.mjs";
 import { officeRecordKey, canonicalOffice } from "../offices.mjs";
 
 const TRAINER_TYPES = new Set(["trainer", "manager"]);
@@ -141,7 +142,7 @@ export function combineAgentsAndGaps(agents, gaps, performance = {}) {
     return office ? `${canonicalOffice(office)}|${name}` : name;
   };
   const agentKey = agent => `${canonicalOffice(agent.office)}|${canonicalName(agent.repName)}`;
-  const lookup = (map, agent) => map?.get(agentKey(agent)) || map?.get(canonicalName(agent.repName));
+  const lookup = (map, agent) => map?.get(agentKey(agent)) || map?.get(canonicalName(agent.repName)) || uniqueNameMatch([...(map?.values()||[])].filter(row=>rowOffice(row)?canonicalOffice(rowOffice(row))===canonicalOffice(agent.office):canonicalOffice(agent.office)==="MADHAV MEHTA"),agent.repName,row=>pick(row,["Rep Name","repName","Name","Agent Name","Agent"]));
   const gapMap = new Map();
   for (const gap of gaps) {
     const name = rowKey(gap);
@@ -153,7 +154,7 @@ export function combineAgentsAndGaps(agents, gaps, performance = {}) {
     const name = canonicalName(agent.repName);
     return {
       ...agent,
-      stats: gapMap.get(agentKey(agent)) || gapMap.get(name) || {},
+      stats: lookup(gapMap,agent) || {},
       performance: {
         lastWorked: periodDetails(lookup(maps.lastWorked, agent)),
         currentWeek: periodDetails(lookup(maps.currentWeek, agent)),
@@ -162,7 +163,7 @@ export function combineAgentsAndGaps(agents, gaps, performance = {}) {
         threeWeeksAgo: periodDetails(lookup(maps.threeWeeksAgo, agent)),
       },
       performanceHistory: historyRows
-        .filter((row) => rowKey(row) === agentKey(agent) || (!rowOffice(row) && rowKey(row) === name))
+        .filter((row) => (rowOffice(row)?canonicalOffice(rowOffice(row))===canonicalOffice(agent.office):canonicalOffice(agent.office)==="MADHAV MEHTA") && nameScore(agent.repName,pick(row,["Rep Name","repName","Name","Agent Name","Agent"]))>=2)
         .map((row) => ({ snapshotDate: normalizeRecordedDate(pick(row, ["Snapshot Date"])), ...periodDetails(row) }))
         .filter((item) => item.recordedDate)
         .sort((a, b) => String(b.recordedDate).localeCompare(String(a.recordedDate))),

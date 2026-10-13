@@ -4,6 +4,7 @@ import path from "path";
 import process from "process";
 import dotenv from "dotenv";
 import { supabaseSheetsClient, closeSupabase } from "./server/supabase-sheets-client.mjs";
+import {uniqueNameMatch} from "./server/rep-identity.mjs";
 import { canonicalOffice, officeRecordKey } from "./offices.mjs";
 
  dotenv.config();
@@ -989,12 +990,11 @@ async function run() {
     readTab(sheets, LAST_WEEK_TAB),
   ]);
 
-  const reps = buildReport(
-    agents,
-    parseLastWorked(lastWorkedTab),
-    parseWeekly(currentWeekTab),
-    parseWeekly(lastWeekTab)
-  );
+  const align=map=>new Map([...map].map(([key,item])=>{
+    const match=uniqueNameMatch(agents.filter(agent=>canonicalOffice(agent.office)===canonicalOffice(item.office)),item.repName);
+    return [match?officeRecordKey(match.repName,match.office):key,item];
+  }));
+  const reps = buildReport(agents,align(parseLastWorked(lastWorkedTab)),align(parseWeekly(currentWeekTab)),align(parseWeekly(lastWeekTab)));
   const rows = buildRows(reps);
   const sheetId = await getOrCreateSheet(sheets, OUTPUT_TAB);
 

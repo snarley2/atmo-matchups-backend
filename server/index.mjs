@@ -9,6 +9,7 @@ import { getAgents, appendAgent, updateAgent, deleteAgent, appendMissingAgents, 
 import { combineAgentsAndGaps, generateGroups, generateStoreGroups, generateWorkGroups, STORE_CATALOG } from "./logic.mjs";
 import { attachProductionLogs, attachTrainingProduction, expandAgentsFromProduction, productionRepDirectory } from "./production-csv.mjs";
 import { registerCoachingRoutes } from "./coaching-routes.mjs";
+import {registerRepLogin,resolveRepLogin} from "./rep-login.mjs";
 import { trainingWatch, attachFocusChecklist } from "./training.mjs";
 import { trainingCoaching } from "./coaching-store.mjs";
 import { importProductionSheets, refreshProductionCache } from "./production-import.mjs";
@@ -89,7 +90,7 @@ function isAdminRole(value) {
   const role = String(value || "").trim().toLowerCase();
   if (!role) return false;
   return role === "trainer" || role === "manager" || role === "admin" || role === "owner" ||
-    role.includes("trainer") || role.includes("manager") || role.includes("director");
+    role.includes("trainer") || role.includes("manager") || role.includes("director") || role.includes("admin") || role.includes("owner");
 }
 
 function safeEqualText(a, b) {
@@ -110,7 +111,7 @@ function issueAdminToken(agent) {
   return `${payload}.${signature}`;
 }
 
-function verifyAdminToken(token) {
+function verifySessionToken(token) {
   if (!token || !adminSessionSecret) return null;
   const [payload, signature] = String(token).split(".");
   if (!payload || !signature) return null;
@@ -118,31 +119,72 @@ function verifyAdminToken(token) {
   if (!safeEqualText(signature, expected)) return null;
   try {
     const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-    if (!data?.repKey || !isAdminRole(data.role) || Number(data.exp) <= Date.now()) return null;
+    if (!data?.repKey || Number(data.exp) <= Date.now()) return null;
     return data;
   } catch {
     return null;
   }
 }
 
+function verifyAdminToken(token) {const session=verifySessionToken(token);return session&&isAdminRole(session.role)?session:null;}
+function issueSessionToken(user){
+  if(!adminSessionSecret)throw new Error("Set ADMIN_SESSION_SECRET on the backend to enable saved Rep ID logins.");
+  const requestedDays=Number(process.env.REP_SESSION_DAYS||90);const days=Number.isFinite(requestedDays)&&requestedDays>0?requestedDays:90;
+  const data={kind:"rep",repKey:user.repKey,repId:user.repId,repName:user.repName,role:user.repType,office:user.office,generalAdmin:user.generalAdmin,exp:Date.now()+days*86400000};
+  const payload=Buffer.from(JSON.stringify(data)).toString("base64url");return payload+"."+crypto.createHmac("sha256",adminSessionSecret).update(payload).digest("base64url");
+}
+
 function bearerToken(req) {
   return String(req.get("Authorization") || "").replace(/^Bearer\s+/i, "").trim();
 }
 
-function requireAdmin(req, res, next) {
-  const session = verifyAdminToken(bearerToken(req));
-  if (!session) return res.status(401).json({ error: "Admin login required" });
-  req.admin = session;
-  next();
+async function requireAdmin(req,res,next){
+  const session=verifySessionToken(bearerToken(req));
+  if(!session||(session.kind!=="rep"&&!isAdminRole(session.role)))return res.status(401).json({error:"Trainer or admin login required"});
+  try{
+    if(session.kind==="rep"){
+      const current=await resolveRepLogin(session.repId,session.office);
+      if(!current.isAdmin)return res.status(403).json({error:"Admin access is limited to trainers and above"});
+      req.admin={...session,repKey:current.repKey,repName:current.repName,role:current.repType};
+    }else req.admin=session;
+    next();
+  }catch(error){next(error)}
 }
+registerRepLogin(app,{bearerToken,verifySessionToken,issueSessionToken});
+app.use("/api",(req,res,next)=>{
+  if(/^\/(auth(?:\/|$)|health(?:\/|$)|offices$|automation\/run$)/.test(req.path))return next();
+  const session=verifySessionToken(bearerToken(req));
+  if(!session)return res.status(401).json({error:"Sign in with your production Rep ID."});
+  req.user=session;
+  if(req.body&&typeof req.body==="object"){
+    if(Object.hasOwn(req.body,"actor"))req.body.actor=session.repName;
+    if(Object.hasOwn(req.body,"author"))req.body.author=session.repName;
+    if(Object.hasOwn(req.body,"enteredBy"))req.body.enteredBy=session.repName;
+  }
+  next();
+});
+
+
+
+io.use((socket,next)=>{if(!verifySessionToken(socket.handshake.auth?.token))return next(new Error("Rep login required"));next()});
 
 io.on("connection", (socket) => {
-  socket.data.actor = sanitizeLiveName(socket.handshake.auth?.actor);
+  socket.data.actor = sanitizeLiveName(verifySessionToken(socket.handshake.auth?.token)?.repName||socket.handshake.auth?.actor);
   socket.data.admin = verifyAdminToken(socket.handshake.auth?.token);
+  let lastRoleCheck=0;
+  socket.use(async(packet,next)=>{
+    const session=verifySessionToken(socket.handshake.auth?.token);
+    if(!session)return next(new Error("Session expired"));
+    if(session.kind==="rep"&&Date.now()-lastRoleCheck>60000){
+      try{const current=await resolveRepLogin(session.repId,session.office);socket.data.admin=current.isAdmin?{...session,role:current.repType}:null;socket.data.actor=current.repName;lastRoleCheck=Date.now();}
+      catch(error){socket.data.admin=null;return next(error)}
+    }
+    next();
+  });
   console.log(`[live] connected ${socket.id} as ${socket.data.actor}${socket.data.admin ? " [admin]" : ""}`);
 
   socket.on("presence:join", ({ actor } = {}) => {
-    socket.data.actor = sanitizeLiveName(actor);
+    socket.data.actor = sanitizeLiveName(verifySessionToken(socket.handshake.auth?.token)?.repName||actor);
     socket.broadcast.emit("presence:update", {
       type: "joined",
       socketId: socket.id,

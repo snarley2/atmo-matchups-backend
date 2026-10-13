@@ -58,6 +58,17 @@ test("Sheets snapshots cover four offices and reject empty source before publica
   await assert.rejects(fetchProductionSnapshots(client,"2026-10-12"),/no valid reps/);
 });
 
+test("formatted Rep IDs retain prefixes and leading zeros during import",async()=>{
+  const client={spreadsheets:{get:async()=>({data:{sheets:[{properties:{title:"1010",sheetId:1}}]}}),values:{get:async({spreadsheetId,valueRenderOption})=>{
+    const source=PRODUCTION_SOURCES.find(source=>source.spreadsheetId===spreadsheetId);
+    if(valueRenderOption==="FORMATTED_VALUE")return {data:{values:[["Rep ID"],[],["MXM-0012"]]}};
+    const rows=grid(source.office);if(source.office==="MADHAV MEHTA"){rows[0][2]="Rep ID";rows[2][2]=12;}
+    return {data:{values:rows}};
+  }}}};
+  const snapshots=await fetchProductionSnapshots(client,"2026-10-12");
+  assert.equal(snapshots.find(snapshot=>snapshot.office==="MADHAV MEHTA").records[0].repId,"MXM-0012");
+});
+
 test("publication replaces daily/week rows inside a transaction and rolls back on failure",async()=>{
   const source=PRODUCTION_SOURCES[0];
   const snapshot={...source,weekEnd:"2026-10-10",sheetId:7,title:"101026",rows:grid(source.office),records:parseProductionRows(grid(source.office),`${source.prefix} - 10.10.2026.sheet`)};
