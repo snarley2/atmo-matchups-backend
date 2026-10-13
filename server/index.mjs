@@ -402,6 +402,7 @@ app.post("/api/auth/admin", async (req, res, next) => {
 
     const agents = await getAgents();
     const requestedKey = String(req.body.repKey || "").trim();
+
     const requestedName = String(req.body.repName || "").trim().toLowerCase();
     const agent = agents.find((item) => requestedKey && item.repKey === requestedKey) ||
       agents.find((item) => requestedName && String(item.repName || "").trim().toLowerCase() === requestedName);
@@ -676,12 +677,13 @@ app.get("/api/numbers-tracking", requireAdmin, async (req, res, next) => {
   }
 });
 
-app.get("/api/manual-numbers", requireAdmin, async (req, res, next) => {
+app.get("/api/manual-numbers", async (req, res, next) => {
   try {
     const office = requestedOffice(req);
     const [entries, agents] = await Promise.all([getManualNumbers(), getAgents()]);
     const keys = new Set(agentsForOffice(agents, office).map((agent) => agent.repKey));
-    res.json(entries.filter((entry) => keys.has(entry.repKey)));
+    const user=await resolveRepLogin(req.user.repId,req.user.office);
+    res.json(entries.filter(entry=>keys.has(entry.repKey)&&(user.isAdmin||(office===user.office&&entry.repKey===user.repKey))));
   } catch (error) {
     next(error);
   }
@@ -695,6 +697,9 @@ app.post("/api/manual-numbers", async (req, res, next) => {
     const office = requestedOffice(req);
     const agents = agentsForOffice(await getAgents(), office);
     const requestedKey = String(req.body.repKey || "").trim();
+    const user=await resolveRepLogin(req.user.repId,req.user.office);
+    if(!user.isAdmin&&(office!==user.office||requestedKey!==user.repKey))return res.status(403).json({error:"You can only record your own daily numbers."});
+
     const matched =
       agents.find((agent) => requestedKey && agent.repKey === requestedKey) ||
       agents.find((agent) => String(agent.repName || "").trim().toLowerCase() === repName.toLowerCase());
@@ -758,6 +763,7 @@ app.post("/api/field-notes", requireAdmin, async (req, res, next) => {
     const office = requestedOffice(req);
     const agents = agentsForOffice(await getAgents(), office);
     const requestedKey = String(req.body.repKey || "").trim();
+
     const matched =
       agents.find((agent) => requestedKey && agent.repKey === requestedKey) ||
       agents.find((agent) => String(agent.repName || "").trim().toLowerCase() === repName.toLowerCase());
