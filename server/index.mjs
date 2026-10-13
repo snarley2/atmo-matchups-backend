@@ -12,6 +12,9 @@ import { registerCoachingRoutes } from "./coaching-routes.mjs";
 import {registerStorePreferenceRoutes} from "./store-preference-routes.mjs";
 import {registerRepLogin,resolveRepLogin} from "./rep-login.mjs";
 import { trainingWatch, attachFocusChecklist } from "./training.mjs";
+import {registerRepProfileRoutes} from "./rep-profile.mjs";
+import {repChecklist} from "./coaching-store.mjs";
+import {listPreferences} from "./store-preferences.mjs";
 import { trainingCoaching } from "./coaching-store.mjs";
 import { importProductionSheets, refreshProductionCache } from "./production-import.mjs";
 import { runDailyAutomation, isDailyAutomationRunning } from "../run.mjs";
@@ -358,6 +361,8 @@ async function buildBootstrap(office = DEFAULT_OFFICE) {
     offices: OFFICES,
   };
 }
+
+registerRepProfileRoutes(app,{loadReps:async office=>attachTrainingProduction((await buildBootstrap(office)).agents),resolveRepLogin,requestedOffice,refreshProductionCache,getFieldNotes,getManualNumbers,repChecklist,listPreferences,getWorkMatchups,getStoreMatchups,getDraftMatchups,getFinalMatchups,catalog:STORE_CATALOG});
 
 app.get("/api/bootstrap", async (req, res, next) => {
   const office = requestedOffice(req);
