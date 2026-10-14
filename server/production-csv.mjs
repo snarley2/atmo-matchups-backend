@@ -191,7 +191,7 @@ export function attachProductionLogs(agents = []) {
   }
   return agents.map((agent) => {
     const officeRecords=records.filter(record=>productionOffice(record.sourceFile)===canonicalOffice(agent.office));
-    const byId=officeRecords.filter(record=>record.repId&&normalizeRepId(record.repId)===normalizeRepId(agent.repKey)).sort((a,b)=>String(b.lastDay?.date||"").localeCompare(String(a.lastDay?.date||"")))[0];
+    const byId=officeRecords.filter(record=>record.repId&&normalizeRepId(record.repId)===normalizeRepId(agent.rep_id||agent.repKey)).sort((a,b)=>String(b.lastDay?.date||"").localeCompare(String(a.lastDay?.date||"")))[0];
     const names=new Map();for(const row of officeRecords){const key=row.keys.at(-1),old=names.get(key);if(!old||String(row.lastDay?.date||"")>String(old.lastDay?.date||""))names.set(key,row);}
     const record = byId || nameKeys(agent.repName).map((key) => byName.get(`${canonicalOffice(agent.office)}|${key}`)).find(Boolean) || uniqueNameMatch([...names.values()],agent.repName);
     return { ...agent, productionRepId:record?.repId||"", productionLog: record ? {
@@ -252,30 +252,7 @@ export function productionRepDirectory() {
 }
 // Attendance/Agents is authoritative for role, team, trainer, and attendance.
 // Production logs only supply newly discovered identities and production metrics.
-export function expandAgentsFromProduction(agents = []) {
-  const existing = new Set();
-  const identities = (rep) => nameKeys(rep.repName)
-    .map((key) => `${canonicalOffice(rep.office)}|${key}`);
-  for (const agent of agents) for (const key of identities(agent)) existing.add(key);
-
-  const discovered = [];
-  for (const rep of productionRepDirectory()) {
-    const keys = identities(rep);
-    if (!keys.length || keys.some((key) => existing.has(key)) || agents.some(agent=>canonicalOffice(agent.office)===canonicalOffice(rep.office)&&nameScore(agent.repName,rep.repName)>=2)) continue;
-    discovered.push({
-      repKey: rep.repKey,
-      repName: rep.repName,
-      office: canonicalOffice(rep.office),
-      repType: rep.repType||"New Rep", // provisional only; existing Attendance roles remain unchanged
-      team: "", teamLead: "", trainer: "", attendance: "in",
-      experienceLevel: "",
-      productionLog: rep.productionLog,
-    });
-    for (const key of keys) existing.add(key);
-  }
-  // Existing Agents objects are retained untouched, in their original order.
-  return [...agents, ...discovered];
-}
+export function expandAgentsFromProduction(agents = []) {return agents;}
 
 // Training eligibility always uses a finished Sunday-Saturday week. A new
 // Monday log supplies current progress, never a replacement eligibility total.
@@ -287,7 +264,7 @@ export function attachTrainingProduction(agents = [], today = new Intl.DateTimeF
   return agents.map(agent => {
     const officeRecords = dated.filter(record => productionOffice(record.sourceFile) === canonicalOffice(agent.office));
     const keys = nameKeys(agent.repName);
-    const direct=officeRecords.filter(record=>record.repId&&normalizeRepId(record.repId)===normalizeRepId(agent.repKey));
+    const direct=officeRecords.filter(record=>record.repId&&normalizeRepId(record.repId)===normalizeRepId(agent.rep_id||agent.repKey));
     const candidates=[...new Map(officeRecords.map(record=>[record.repId||record.keys.at(-1),record])).values()];
     const matched=uniqueNameMatch(candidates,agent.repName);
     const matching = direct.length?direct:officeRecords.filter(record => record.keys.some(key => keys.includes(key)) || (matched&&record.keys.at(-1)===matched.keys.at(-1)));

@@ -13,7 +13,8 @@
     "write:agents": "node write-agents-to-sheet.mjs",
     "migrate:supabase": "node scripts/migrate-google-sheets-to-supabase.mjs",
     "sync:performance": "node scripts/sync-workmyt-to-supabase.mjs",
-    "import:production": "node scripts/import-production-sheets.mjs"
+    "import:production": "node scripts/import-production-sheets.mjs",
+    "update:production": "node scripts/update-store-production.mjs"
   },
   "dependencies": {
     "cors": "^2.8.5",

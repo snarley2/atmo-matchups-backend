@@ -119,7 +119,7 @@ export async function importProductionSheets(){
     if(!locked)return {skipped:true,reason:"another server is importing"};
     const snapshots=await fetchProductionSnapshots(sheetsClient());
     await saveProductionSnapshots(connection,snapshots);await refreshProductionCache(true);
-    await syncProductionIdentities(connection,getProductionLogRecords().map(record=>({...record,office:productionOffice(record.sourceFile),weekEnd:productionWeekEnd(record.sourceFile.match(/(\d{2}\.\d{2}\.\d{4})/)?.[1])})));
+    await syncProductionIdentities(connection,snapshots.flatMap(snapshot=>snapshot.records.map(record=>({...record,office:snapshot.office,weekEnd:snapshot.weekEnd}))));
     console.log(`[production-import] Stored ${snapshots.length} office/week snapshots in Supabase`);
     return {success:true,weeks:snapshots.length,reps:snapshots.reduce((sum,snapshot)=>sum+snapshot.records.length,0)};
   }finally{

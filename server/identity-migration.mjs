@@ -1,82 +1,50 @@
-import crypto from "node:crypto";
-import {canonicalOffice} from "../offices.mjs";
-import {normalizeRepId,validRepId,uniqueNameMatch} from "./rep-identity.mjs";
-
-// Only identity columns/references are rewritten. Manual Attendance fields are
-// copied unchanged, including trainer, team, attendance and readiness.
+import {canonicalOffice} from '../offices.mjs';
+import {normalizeRepId,validRepId,uniqueNameMatch} from './rep-identity.mjs';
+// Agents own identity. Link a production ID without changing keys, offices,
+// manual fields, board references, or the legacy alias table.
 export function migrateIdentityRows(tabs,records){
  const clones=tabs.map(tab=>({...tab,rows:structuredClone(tab.rows)}));
- const agents=clones.find(tab=>tab.title===(process.env.AGENTS_SHEET_NAME||"Agents"));
- if(!agents?.rows.length)throw new Error("Agents must be populated before converting rep IDs.");
- const headers=agents.rows[0],keyCol=headers.indexOf("repKey"),nameCol=headers.indexOf("repName"),officeCol=headers.indexOf("office");
- if(keyCol<0||nameCol<0||officeCol<0)throw new Error("Agents identity headers are missing; refusing conversion.");
- const byId=new Map(),duplicateIds=new Set();
- for(const record of records){
-  if(!validRepId(record.repId)||!record.office)continue;
-  const key=`${canonicalOffice(record.office)}|${normalizeRepId(record.repId)}`;
-  const old=byId.get(key);
-  if(old&&!uniqueNameMatch([old],record.repName))duplicateIds.add(key);
-  if(!old||String(record.weekEnd||"")>String(old.weekEnd||""))byId.set(key,record);
- }
- const aliases=[],warnings=[];
- const claimedRows=new Set();
- for(const [identityKey,record] of [...byId].sort((a,b)=>String(b[1].weekEnd||"").localeCompare(String(a[1].weekEnd||"")))){
-  if(duplicateIds.has(identityKey)){warnings.push(`${record.office}: duplicate production ID; no identity changed`);continue;}
-  const office=canonicalOffice(record.office),repId=normalizeRepId(record.repId);
-  const officeRows=agents.rows.slice(1).filter(row=>canonicalOffice(row[officeCol])===office);
-  const existing=officeRows.find(row=>normalizeRepId(row[keyCol])===repId);
-  const matched=existing||uniqueNameMatch(officeRows,record.repName,row=>row[nameCol]);
-  const matchingCount=officeRows.filter(row=>uniqueNameMatch([row],record.repName,r=>r[nameCol])).length;
-  if(!matched&&matchingCount){warnings.push(`${office}: ambiguous identity for ${record.repName}; no identity changed`);continue;}
-  if(matched&&claimedRows.has(matched))continue;
-  if(matched){
-   claimedRows.add(matched);
-   const oldKey=String(matched[keyCol]);
-   if(oldKey!==repId){aliases.push({office,oldKey,repId});matched[keyCol]=repId;}
-  }else{
-   const data={repKey:repId,repName:record.repName,office,repType:record.repType||"New Rep",team:"",teamLead:"",trainer:"",attendance:"in",experienceLevel:"Newer"};
-   agents.rows.push(headers.map(header=>data[header]??""));
+ const agents=clones.find(tab=>tab.title===(process.env.AGENTS_SHEET_NAME||'Agents'));
+ if(!agents?.rows.length)throw new Error('Agents must be populated before linking rep IDs.');
+ const h=agents.rows[0],key=h.indexOf('repKey'),name=h.indexOf('repName'),office=h.indexOf('office');
+ if([key,name,office].some(i=>i<0))throw new Error('Agents identity headers are missing.');
+ let id=h.indexOf('rep_id');if(id<0){id=h.length;h.push('rep_id')}
+ const warnings=[];
+ const owners=new Map();for(const record of records){if(!validRepId(record.repId)||!record.office)continue;const id=normalizeRepId(record.repId);if(!owners.has(id))owners.set(id,new Set());owners.get(id).add(canonicalOffice(record.office))}
+ const original=agents.rows.slice(1);
+ agents.rows=[h,...original.filter(row=>{
+  const sourceOwners=owners.get(normalizeRepId(row[id]||row[key]));
+  if(!sourceOwners||sourceOwners.size!==1||sourceOwners.has(canonicalOffice(row[office])))return true;
+  const owner=[...sourceOwners][0];
+  const twin=original.find(other=>other!==row&&other[key]===row[key]&&canonicalOffice(other[office])===owner&&String(other[name]).toLowerCase()===String(row[name]).toLowerCase());
+  const safe=h.every((field,index)=>['repKey','repName','office','rep_id','repType'].includes(field)||!row[index]||(field==='attendance'&&row[index]==='in')||(field==='experienceLevel'&&row[index]==='Newer'));
+  const source=records.find(record=>normalizeRepId(record.repId)===normalizeRepId(row[id]||row[key])&&canonicalOffice(record.office)===owner);
+  if(twin&&safe&&(!row[h.indexOf('repType')]||row[h.indexOf('repType')]===source?.repType)){
+   warnings.push(`Removed empty duplicate ${row[name]} from ${row[office]}; verified production office is ${owner}.`);return false;
   }
-  const oldProdKey="prod-"+crypto.createHash("sha256").update(`${office}|${record.keys?.at(-1)||""}`).digest("hex").slice(0,24);
-  aliases.push({office,oldKey:oldProdKey,repId});
+  if(twin)warnings.push(`Review duplicate ${row[name]} in ${row[office]}: manual settings preserved.`);return true;
+ })];
+ for(const row of agents.rows.slice(1)){
+  if(validRepId(row[id]))continue;
+  if(validRepId(row[key])&&/-\d+$/.test(String(row[key]))&&!/^(?:prod-|[0-9a-f]{8}-[0-9a-f]{4}-)/i.test(String(row[key]))){row[id]=normalizeRepId(row[key]);continue}
+  const source=records.filter(record=>canonicalOffice(record.office)===canonicalOffice(row[office])&&validRepId(record.repId));
+  const candidates=[...new Map(source.map(record=>[normalizeRepId(record.repId)+'|'+record.repName,record])).values()];
+  const matched=uniqueNameMatch(candidates,row[name]);
+  if(!matched)continue;
+  const sameNameRows=agents.rows.slice(1).filter(other=>canonicalOffice(other[office])===canonicalOffice(row[office])&&uniqueNameMatch([other],matched.repName,r=>r[name]));
+  const conflict=candidates.some(other=>normalizeRepId(other.repId)===normalizeRepId(matched.repId)&&!uniqueNameMatch([other],matched.repName));
+  if(sameNameRows.length!==1||conflict){warnings.push(`Ambiguous ID for ${row[name]} in ${row[office]}; link manually in Attendance.`);continue}
+  row[id]=normalizeRepId(matched.repId);
  }
- const replacements=new Map(aliases.map(alias=>[alias.oldKey,alias.repId]));
- const rewrite=value=>{
-  if(Array.isArray(value))return value.map(rewrite);
-  if(value&&typeof value==="object")return Object.fromEntries(Object.entries(value).map(([key,v])=>[key,rewrite(v)]));
-  if(typeof value!=="string")return value;
-  if(replacements.has(value))return replacements.get(value);
-  if(/^[\[{]/.test(value)){try{const parsed=JSON.parse(value),changed=rewrite(parsed);return JSON.stringify(parsed)===JSON.stringify(changed)?value:JSON.stringify(changed)}catch{}}
-  return value;
- };
- for(const tab of clones)tab.rows=rewrite(tab.rows);
- return {tabs:clones,aliases,warnings};
+ return {tabs:clones,aliases:[],warnings};
 }
-
 export async function syncProductionIdentities(connection,records){
- await connection.query(`CREATE TABLE IF NOT EXISTS public.rep_id_aliases(office text NOT NULL,old_key text NOT NULL,rep_id text NOT NULL,PRIMARY KEY(office,old_key));
- ALTER TABLE public.rep_id_aliases ENABLE ROW LEVEL SECURITY;REVOKE ALL ON public.rep_id_aliases FROM anon,authenticated;`);
- await connection.query("BEGIN");
+ await connection.query('BEGIN');
  try{
-  await connection.query("SELECT pg_advisory_xact_lock(hashtext('atmo-rep-identity-migration'))");
-  const result=await connection.query("SELECT title,rows FROM public.project_tabs ORDER BY title FOR UPDATE");
+  await connection.query("SELECT pg_advisory_xact_lock(hashtext('atmo-rep-identity-link'))");
+  const result=await connection.query('SELECT title,rows FROM public.project_tabs ORDER BY title FOR UPDATE');
   const migrated=migrateIdentityRows(result.rows,records);
-  for(const tab of migrated.tabs){const old=result.rows.find(row=>row.title===tab.title);if(JSON.stringify(old.rows)!==JSON.stringify(tab.rows))await connection.query("UPDATE public.project_tabs SET rows=$2::jsonb,revision=revision+1,updated_at=now() WHERE title=$1",[tab.title,JSON.stringify(tab.rows)]);}
-  const definitions=[
-   {table:"rep_store_preferences",columns:"office,rep_key,store_ids,updated_at",tail:"store_ids,updated_at"},
-   {table:"coaching_rep_methods",columns:"office,rep_key,method_id,implemented,updated_at,updated_by",tail:"method_id,implemented,updated_at,updated_by"},
-   {table:"production_weekly_reps",columns:"office,rep_key,rep_name,week_end,electric,gas,production,imported_at",tail:"rep_name,week_end,electric,gas,production,imported_at"},
-   {table:"production_days",columns:"office,rep_key,rep_name,work_date,worked,electric,gas,partials,production,imported_at",tail:"rep_name,work_date,worked,electric,gas,partials,production,imported_at"},
-  ];
-  const present=new Set();for(const def of definitions){const check=await connection.query("SELECT to_regclass($1) AS name",[`public.${def.table}`]);if(check.rows[0].name)present.add(def.table);}
-  for(const alias of migrated.aliases){
-   if(alias.oldKey===alias.repId)continue;
-   await connection.query("INSERT INTO public.rep_id_aliases(office,old_key,rep_id) VALUES($1,$2,$3) ON CONFLICT(office,old_key) DO UPDATE SET rep_id=excluded.rep_id",[alias.office,alias.oldKey,alias.repId]);
-   for(const def of definitions)if(present.has(def.table)){
-    await connection.query(`INSERT INTO public.${def.table}(${def.columns}) SELECT office,$3,${def.tail} FROM public.${def.table} WHERE office=$1 AND rep_key=$2 ${def.table==="coaching_rep_methods"?"ON CONFLICT(office,rep_key,method_id) DO UPDATE SET implemented=excluded.implemented,updated_at=excluded.updated_at,updated_by=excluded.updated_by WHERE excluded.updated_at>coaching_rep_methods.updated_at":"ON CONFLICT DO NOTHING"}`,[alias.office,alias.oldKey,alias.repId]);
-    await connection.query(`DELETE FROM public.${def.table} WHERE office=$1 AND rep_key=$2`,[alias.office,alias.oldKey]);
-   }
-  }
-  await connection.query("COMMIT");for(const warning of migrated.warnings)console.warn("[rep-identity]",warning);return migrated;
- }catch(error){await connection.query("ROLLBACK");throw error;}
+  for(const tab of migrated.tabs){const old=result.rows.find(row=>row.title===tab.title);if(JSON.stringify(old.rows)!==JSON.stringify(tab.rows))await connection.query('UPDATE public.project_tabs SET rows=$2::jsonb,revision=revision+1,updated_at=now() WHERE title=$1',[tab.title,JSON.stringify(tab.rows)])}
+  await connection.query('COMMIT');for(const warning of migrated.warnings)console.warn('[rep-id]',warning);return migrated;
+ }catch(error){await connection.query('ROLLBACK');throw error}
 }

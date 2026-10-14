@@ -1,4 +1,7 @@
 import "dotenv/config";
+import {liveWorkGroups} from "./work-state.mjs";
+import {registerRoadtripRoutes,decorateRoadtrips,listRoadtrips} from "./roadtrips.mjs";
+import {normalizeRepId,validRepId,nameScore} from "./rep-identity.mjs";
 import express from "express";
 import { createServer } from "node:http";
 import { Server as SocketIOServer } from "socket.io";
@@ -335,6 +338,7 @@ function requestedOffice(req) {
   return canonicalOffice(req.query?.office || req.body?.office || DEFAULT_OFFICE);
 }
 
+registerRoadtripRoutes(app,{requireAdmin,requestedOffice,io});
 registerCoachingRoutes(app,{requireAdmin,requestedOffice,getAgents,expandAgentsFromProduction});
 
 async function buildBootstrap(office = DEFAULT_OFFICE) {
@@ -432,12 +436,13 @@ app.post("/api/production-reps/import", requireAdmin, async (_req, res, next) =>
     const current = await getAgents();
     // Production imports are append-only and can run even if the roster is small.
     // Existing roles and attendance are never imported from production logs.
-    const combined = expandAgentsFromProduction(current);
-    const additions = combined.slice(current.length).map(({ productionLog, ...agent }) => agent);
+    const additions=productionRepDirectory().filter(rep=>!current.some(agent=>agent.office===rep.office&&(nameScore(agent.repName,rep.repName)>=2||normalizeRepId(agent.rep_id||agent.repKey)===normalizeRepId(rep.repId)))).map(rep=>({repKey:crypto.randomUUID(),rep_id:rep.repId||'',repName:rep.repName,office:rep.office,repType:rep.repType||'New Rep',team:'',teamLead:'',trainer:'',attendance:'in',experienceLevel:''}));
     const added = await appendMissingAgents(additions);
     res.json({ added, total: current.length + added });
   } catch (error) { next(error); }
 });
+app.post("/api/production/refresh",requireAdmin,async(req,res,next)=>{try{const result=await importProductionSheets();io.emit("production:updated",result);res.json(result)}catch(error){next(error)}});
+
 app.get("/api/work-reps", async (_req, res, next) => {
   try { res.json({reps: attachProductionLogs(expandAgentsFromProduction(await getAgents()))}); }
   catch (error) { next(error); }
@@ -458,6 +463,8 @@ app.post("/api/agents", requireAdmin, async (req, res, next) => {
       team: String(req.body.team || "").trim(),
       teamLead: String(req.body.teamLead || "").trim(),
       trainer: String(req.body.trainer || "").trim(),
+      rep_id:normalizeRepId(req.body.rep_id),
+      roadtripId:String(req.body.roadtripId||""),
       attendance: String(req.body.attendance || "in").trim().toLowerCase(),
       experienceLevel:
         String(req.body.repType || "New Rep").trim().toLowerCase() === "leader"
@@ -473,6 +480,13 @@ app.post("/api/agents", requireAdmin, async (req, res, next) => {
 app.put("/api/agents/:repKey", requireAdmin, async (req, res, next) => {
   try {
     const repKey = String(req.params.repKey);
+    if(req.body.rep_id){
+      const id=normalizeRepId(req.body.rep_id);if(!validRepId(id))return res.status(400).json({error:'Invalid Rep ID.'});
+      const roster=await getAgents(),me=roster.find(rep=>rep.repKey===repKey&&(!req.body.office||rep.office===requestedOffice(req)));
+      if(roster.some(rep=>rep.repKey!==repKey&&rep.office===me?.office&&normalizeRepId(rep.rep_id||rep.repKey)===id))return res.status(409).json({error:'Rep ID is already assigned in this office.'});req.body.rep_id=id;
+    }
+    if(req.body.attendance&&!['in','absent','out','roadtrip'].includes(req.body.attendance))return res.status(400).json({error:'Choose In, Absent, or Roadtrip.'});
+    if(req.body.roadtripId){const me=(await getAgents()).find(rep=>rep.repKey===repKey&&(!req.body.office||rep.office===requestedOffice(req)));if(!me||(await listRoadtrips(me.office)).every(trip=>trip.id!==req.body.roadtripId))return res.status(400).json({error:'Choose a roadtrip in this rep’s office.'})}
     let updated = await updateAgent(repKey, req.body || {});
     if (!updated) {
       // Production-only reps may be edited before their first import.
@@ -493,13 +507,14 @@ app.put("/api/agents/:repKey", requireAdmin, async (req, res, next) => {
       }
     }
     io.emit("agents:update", updated);
-    res.json(updated);
+    io.emit("agents:updated");
+    res.json((await decorateRoadtrips([updated]))[0]);
   } catch (error) { next(error); }
 });
 
 app.delete("/api/agents/:repKey", requireAdmin, async (req, res, next) => {
   try {
-    const removed = await deleteAgent(req.params.repKey);
+    const removed = await deleteAgent(req.params.repKey,requestedOffice(req));
     if (!removed) return res.status(404).json({error:"Agent not found"});
     res.status(204).end();
   } catch (error) { next(error); }
@@ -585,7 +600,7 @@ app.post("/api/work-matchups/generate", requireAdmin, async (_req, res, next) =>
 });
 
 app.get("/api/work-matchups", async (_req, res, next) => {
-  try { res.json(await getWorkMatchups()); } catch (error) { next(error); }
+  try { const plan=await getWorkMatchups();res.json({...plan,groups:liveWorkGroups(plan.groups||[],attachProductionLogs(await getAgents()))}); } catch (error) { next(error); }
 });
 
 app.post("/api/work-matchups", requireAdmin, async (req, res, next) => {

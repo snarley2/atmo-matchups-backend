@@ -260,7 +260,7 @@ function focusForRep(agent) {
 function isPresent(agent) {
   // Attendance from the UI is the source of truth for auto-generation.
   // Only people explicitly marked "in" may be matched or selected to lead.
-  return lower(agent?.attendance || "in") === "in";
+  return lower(agent?.repType)!=="absent"&&(lower(agent?.attendance||"in")==="in"||(lower(agent?.attendance)==="roadtrip"&&!agent?.roadtripActive));
 }
 
 function activeTrainees(agents) {

@@ -12,27 +12,16 @@ export async function resolveRepLogin(value,office){
  const repId=enteredId;
  if(!repId)throw Object.assign(new Error("Enter your production Rep ID."),{status:400});
  if(comparableId(repId)===comparableId(generalId()))return {repKey:generalId(),repId:generalId(),repName:"General Admin",repType:"Admin",office:canonicalOffice(office),isAdmin:true,generalAdmin:true};
- await refreshProductionCache();
- const officeRecords=getProductionLogRecords().filter(record=>validRepId(record.repId)&&(!office||productionOffice(record.sourceFile)===canonicalOffice(office)));
- let records=officeRecords.filter(record=>comparableId(record.repId)===comparableId(repId));
- if(!records.length&&!repId.startsWith("CYD1-"))records=officeRecords.filter(record=>comparableId(record.repId)===comparableId(`CYD1-${repId}`));
- const numericSuffix=repId.match(/^(?:CYD1-)?(\d+)$/)?.[1];
- if(!records.length&&numericSuffix)records=officeRecords.filter(record=>normalizeRepId(record.repId).startsWith("CYD1-")&&normalizeRepId(record.repId).split("-").at(-1)===numericSuffix);
- if(new Set(records.map(record=>comparableId(record.repId))).size>1)throw Object.assign(new Error("More than one rep has that ID number. Enter the initials and number after CYD1-, as shown in your production log."),{status:409});
- const offices=new Set(records.map(record=>productionOffice(record.sourceFile)));
- if(!records.length)throw Object.assign(new Error("Rep ID not found in the imported production sheets. Check your office or ask an admin to refresh production."),{status:404});
- if(offices.size!==1)throw Object.assign(new Error("This Rep ID appears in more than one office. Select your office."),{status:409});
- const selected=[...offices][0];
- const identities=[...new Map(records.map(record=>[record.keys?.at(-1)||record.repName,record])).values()];
- if(identities.length>1&&!identities.every(record=>uniqueNameMatch([identities[0]],record.repName)))throw Object.assign(new Error("This Rep ID is assigned to different reps in the source sheets. Ask an admin to correct it."),{status:409});
- const dateKey=record=>{const match=record.sourceFile.match(/(\d{2})\.(\d{2})\.(\d{4})/);return match?`${match[3]}-${match[1]}-${match[2]}`:""};
- const newest=[...records].sort((a,b)=>dateKey(b).localeCompare(dateKey(a)))[0];
- const source={...productionRepDirectory().find(rep=>rep.office===selected&&comparableId(rep.repId)===comparableId(newest.repId)),...newest};
- const agents=(await getAgents()).filter(agent=>canonicalOffice(agent.office)===selected);
- const agent=agents.find(agent=>comparableId(agent.repKey)===comparableId(source.repId))||uniqueNameMatch(agents,source.repName);
- if(!agent&&agents.some(candidate=>nameScore(candidate.repName,source.repName)>=2))throw Object.assign(new Error("More than one roster identity matches this Rep ID. Ask an admin to resolve the names."),{status:409});
- const role=adminRole(source.repType)?source.repType:adminRole(agent?.repType)?agent.repType:source.repType||agent?.repType||"New Rep";
- return {repKey:source.repId,repId:source.repId,repName:agent?.repName||source.repName,repType:role,office:selected,isAdmin:adminRole(role),generalAdmin:false};
+ const roster=(await getAgents()).filter(agent=>!office||canonicalOffice(agent.office)===canonicalOffice(office));
+ const storedId=agent=>normalizeRepId(agent.rep_id||(/-\d+$/.test(agent.repKey||'')&&!/^(?:prod-|[0-9a-f]{8}-[0-9a-f]{4}-)/i.test(agent.repKey||'')?agent.repKey:''));
+ let matches=roster.filter(agent=>storedId(agent)&&comparableId(storedId(agent))===comparableId(repId));
+ if(!matches.length&&!repId.startsWith('CYD1-'))matches=roster.filter(agent=>comparableId(storedId(agent))===comparableId(`CYD1-${repId}`));
+ const suffix=repId.match(/^(?:CYD1-)?(\d+)$/)?.[1];
+ if(!matches.length&&suffix)matches=roster.filter(agent=>storedId(agent).startsWith('CYD1-')&&storedId(agent).split('-').at(-1)===suffix);
+ if(!matches.length)throw Object.assign(new Error('Rep ID not found in Agents. Ask an admin to set your Rep ID in Attendance.'),{status:404});
+ if(matches.length!==1)throw Object.assign(new Error('Rep ID matches more than one Agents row. Select your office or ask an admin to correct the Rep IDs.'),{status:409});
+ const agent=matches[0],role=agent.repType||'New Rep';
+ return {repKey:agent.repKey,repId:storedId(agent),repName:agent.repName,repType:role,office:canonicalOffice(agent.office),isAdmin:adminRole(role),generalAdmin:false};
 }
 
 export function registerRepLogin(app,{bearerToken,verifySessionToken,issueSessionToken}){
@@ -43,7 +32,6 @@ export function registerRepLogin(app,{bearerToken,verifySessionToken,issueSessio
   attempts.set(key,[...recent,now]);if(attempts.size>5000)for(const [key,times] of attempts)if(now-times.at(-1)>60000)attempts.delete(key);
   try{
    const user=await resolveRepLogin(req.body?.repId,req.body?.office);
-   if(!user.generalAdmin)await synchronizeRepIdentities();
    res.json({token:issueSessionToken(user),user});
   }catch(error){next(error)}
  });

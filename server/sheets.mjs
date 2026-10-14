@@ -1,3 +1,4 @@
+import {decorateRoadtrips} from "./roadtrips.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -21,7 +22,7 @@ const fieldNotesTab = process.env.FIELD_NOTES_SHEET_NAME || "Field Notes";
 const manualNumbersTab = process.env.MANUAL_NUMBERS_SHEET_NAME || "Manual Numbers";
 const suggestionsTab = process.env.SUGGESTIONS_SHEET_NAME || "Suggestions";
 
-const AGENT_HEADERS = ["repKey", "repName", "office", "repType", "team", "teamLead", "trainer", "attendance", "experienceLevel"];
+const AGENT_HEADERS = ["repKey", "repName", "office", "repType", "team", "teamLead", "trainer", "attendance", "experienceLevel", "rep_id", "roadtripId"];
 
 function credentialsPath() {
   const configured = process.env.GOOGLE_SERVICE_ACCOUNT_FILE || process.env.GOOGLE_APPLICATION_CREDENTIALS;
@@ -101,7 +102,7 @@ function rowsToObjects({ headers, rows }) {
 
 export async function getAgents() {
   const tab = await readTab(agentsTab);
-  return rowsToObjects(tab).filter((a) => a.repKey || a.repName);
+  return decorateRoadtrips(rowsToObjects(tab).filter((a) => a.repKey || a.repName));
 }
 
 // Append-only production imports: never clear or rewrite Attendance rows.
@@ -133,7 +134,7 @@ export async function appendMissingAgents(additions = []) {
   const rows = fresh.map(agent => AGENT_HEADERS.map(field => agent[field] ?? ""));
   await client.spreadsheets.values.append({
     spreadsheetId,
-    range: `'${agentsTab}'!A:I`,
+    range: `'${agentsTab}'!A:K`,
     valueInputOption: "RAW",
     insertDataOption: "INSERT_ROWS",
     requestBody: {values: rows},
@@ -143,11 +144,13 @@ export async function appendMissingAgents(additions = []) {
 
 // Agents are authoritative user-managed data. Never clear and rebuild this tab.
 // Locate the live row by its stable key before every targeted write.
-async function agentRowForKey(repKey) {
+async function agentRowForKey(repKey, office) {
   const tab = await readTab(agentsTab);
   const col = tab.headers.indexOf("repKey");
   if (col < 0) throw new Error("Agents sheet has no repKey header; refusing write");
-  const index = tab.rows.findIndex(row => String(row[col] || "") === String(repKey));
+  const matches=tab.rows.map((row,index)=>({row,index})).filter(({row})=>String(row[col]||"")===String(repKey)&&(!office||canonicalOffice(row[tab.headers.indexOf("office")])===canonicalOffice(office)));
+  if(matches.length>1)throw Object.assign(new Error("Duplicate agent key: correct this rep in Agents before editing."),{status:409});
+  const index=matches[0]?.index??-1;
   return index < 0 ? null : { rowNumber: index + 2, tab };
 }
 
@@ -158,7 +161,7 @@ export async function appendAgent(agent) {
   if (existing) throw new Error("Agent key already exists");
   const client = await sheetsClient();
   await client.spreadsheets.values.append({
-    spreadsheetId, range: `'${agentsTab}'!A:I`, valueInputOption: "RAW",
+    spreadsheetId, range: `'${agentsTab}'!A:K`, valueInputOption: "RAW",
     insertDataOption: "INSERT_ROWS",
     requestBody: { values: [AGENT_HEADERS.map(field => agent[field] ?? "")] },
   });
@@ -166,26 +169,19 @@ export async function appendAgent(agent) {
 }
 
 export async function updateAgent(repKey, changes) {
-  const located = await agentRowForKey(repKey);
-  if (!located) return null;
-  const {rowNumber, tab} = located;
-  const header = tab.headers;
-  const current = Object.fromEntries(header.map((name,i)=>[name,tab.rows[rowNumber-2][i] ?? ""]));
-  // Preserve identity and any fields not explicitly changed.
-  const allowed = ["repType", "team", "teamLead", "trainer", "attendance", "experienceLevel"];
-  const next = {...current};
-  for (const field of allowed) if (Object.hasOwn(changes,field)) next[field] = changes[field] ?? "";
-  const client = await sheetsClient();
-  // Update only D:I; never touch the other reps or identity columns.
-  await client.spreadsheets.values.update({
-    spreadsheetId, range: `'${agentsTab}'!D${rowNumber}:I${rowNumber}`,
-    valueInputOption: "RAW", requestBody: {values: [[...allowed.map(field=>next[field] ?? "")]]},
-  });
-  return next;
+ const located=await agentRowForKey(repKey,changes.office);if(!located)return null;
+ const {rowNumber,tab}=located;const h=[...tab.headers];
+ for(const field of ['rep_id','roadtripId'])if(!h.includes(field))h.push(field);
+ const old=tab.rows[rowNumber-2],next=Object.fromEntries(h.map((name,i)=>[name,old[i]??'']));
+ for(const field of ['repType','team','teamLead','trainer','attendance','experienceLevel','rep_id','roadtripId'])if(Object.hasOwn(changes,field))next[field]=changes[field]??'';
+ const client=await sheetsClient();
+ if(h.length!==tab.headers.length)await client.spreadsheets.values.update({spreadsheetId,range:`'${agentsTab}'!A1`,valueInputOption:'RAW',requestBody:{values:[h]}});
+ await client.spreadsheets.values.update({spreadsheetId,range:`'${agentsTab}'!A${rowNumber}`,valueInputOption:'RAW',requestBody:{values:[h.map(field=>next[field]??'')]}});
+ return next;
 }
 
-export async function deleteAgent(repKey) {
-  const located = await agentRowForKey(repKey);
+export async function deleteAgent(repKey,office) {
+  const located = await agentRowForKey(repKey,office);
   if (!located) return false;
   const client = await sheetsClient();
   const book = await client.spreadsheets.get({spreadsheetId,fields:"sheets.properties"});
