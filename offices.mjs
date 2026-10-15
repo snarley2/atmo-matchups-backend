@@ -4,7 +4,7 @@ export const OFFICES = [
   { id: "madhav-mehta", name: "MADHAV MEHTA", label: "Madhav Mehta" },
   //
   { id: "canyon-tuman", name: "CANYON TUMAN", label: "Canyon Tuman" },
-  { id: "collin-willhelm", name: "COLLIN WILLHELM", label: "Collin Willhelm" },
+  { id: "collin-wilhelm", name: "COLLIN WILLHELM", label: "Collin Willhelm" },
   { id: "keasel-broom", name: "KEASEL BROOM", label: "Keasel Broom" },
 ];
 

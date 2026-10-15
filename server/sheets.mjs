@@ -102,7 +102,7 @@ function rowsToObjects({ headers, rows }) {
 
 export async function getAgents() {
   const tab = await readTab(agentsTab);
-  return decorateRoadtrips(rowsToObjects(tab).filter((a) => a.repKey || a.repName));
+  return decorateRoadtrips(rowsToObjects(tab).filter((a) => a.repKey || a.repName).map(agent=>({...agent,office:canonicalOffice(agent.office)})));
 }
 
 // Append-only production imports: never clear or rewrite Attendance rows.

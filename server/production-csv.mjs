@@ -117,7 +117,7 @@ function parseAiLog(rows, fileName) {
   const lastIndex = header.findIndex((value) => value.toLowerCase() === "lw elec");
   const twoIndex = header.findIndex((value) => value.toLowerCase() === "lw2 elec");
   const partialIndexes = detail.map((value, index) => String(value || "").trim().toLowerCase() === "p" && index < currentIndex ? index : -1).filter((index) => index >= 0);
-  return rows.slice(headerIndex + 2).flatMap((row) => {
+  return rows.slice(headerIndex + (isProductionRepName(String(detail[0]||""))?1:2)).flatMap((row) => {
     const repName = String(row[0] || "").trim();
     if (/^--/.test(repName) || /(?:team|total)s?$/i.test(repName)) return [];
     const keys = nameKeys(repName);
@@ -133,7 +133,8 @@ function parseAiLog(rows, fileName) {
 }
 
 function parseStandardLog(rows, fileName) {
-  const headerIndex = rows.findIndex((row) => row.some((value) => /^prev\.?\s*week/i.test(String(value || "").trim())));
+  let headerIndex = rows.findIndex((row) => row.some((value) => /^prev\.?\s*week/i.test(String(value || "").trim())));
+  if(headerIndex<0)headerIndex=rows.findIndex(row=>row.some(value=>/^electric$/i.test(String(value||"").trim()))&&row.some(value=>/^gas$/i.test(String(value||"").trim())));
   if (headerIndex < 0) return [];
   const header = Array.from(rows[headerIndex], value => String(value ?? "").trim());
   const electricIndexes = header.map((value, index) => /^electric$/i.test(value) ? index : -1).filter((index) => index >= 0);
@@ -223,10 +224,10 @@ export function isProductionRepName(value) {
   const name = String(value || "").replace(/\s*\((?:PL|L|OWNER|TRAINER)\)\s*$/i, "").trim();
   if (!name || name.length > 70 || /[\d:%📊]/u.test(name)) return false;
   if (/^(?:roll\s*call|notes?|bonus(?:es|'?s)?(?:\s*\/\s*notes?)?|standards?\s+raised|championship|agents?\s+working|gas\s+attach|rep\s+name\s+colou?rs?|daily\s+metrics|totals?|team|office|average|legend|key)\b/i.test(name)) return false;
-  if (/\b(?:notes?|metrics?|bonus|legend|colou?rs?|attach|percentage|summary|standard|quota|goals?)\b/i.test(name)) return false;
-  // Names may contain hyphens/apostrophes but should be 2-5 name words.
+  if (/\b(?:notes?|metrics?|bonus|legend|colou?rs?|attach|percentage|summary|standards?|quota|goals?|staffing|assignments?|inventory)\b/i.test(name)) return false;
+  // Accept initials and longer names while excluding sheet headings.
   const words = name.replace(/[,.'’\-]/g," ").split(/\s+/).filter(Boolean);
-  return words.length >= 2 && words.length <= 5 && words.every(w=>/^[A-Za-zÀ-ÿ]{2,}$/.test(w));
+  return words.length >= 2 && words.length <= 8 && words.some(w=>w.length>=2) && words.every(w=>/^\p{L}+$/u.test(w));
 }
 
 export function productionRepDirectory() {

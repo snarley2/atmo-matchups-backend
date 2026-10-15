@@ -1,4 +1,6 @@
 import "dotenv/config";
+import {registerResponsibilityRoutes} from "./responsibilities-routes.mjs";
+import {history as getResponsibilityHistory} from "./responsibilities-store.mjs";
 import {liveWorkGroups} from "./work-state.mjs";
 import {registerRoadtripRoutes,decorateRoadtrips,listRoadtrips} from "./roadtrips.mjs";
 import {normalizeRepId,validRepId,nameScore} from "./rep-identity.mjs";
@@ -338,6 +340,7 @@ function requestedOffice(req) {
   return canonicalOffice(req.query?.office || req.body?.office || DEFAULT_OFFICE);
 }
 
+registerResponsibilityRoutes(app,{requireAdmin,requestedOffice,getAgents,io});
 registerRoadtripRoutes(app,{requireAdmin,requestedOffice,io});
 registerCoachingRoutes(app,{requireAdmin,requestedOffice,getAgents,expandAgentsFromProduction});
 
@@ -366,7 +369,7 @@ async function buildBootstrap(office = DEFAULT_OFFICE) {
   };
 }
 
-registerRepProfileRoutes(app,{loadReps:async office=>attachTrainingProduction((await buildBootstrap(office)).agents),resolveRepLogin,requestedOffice,refreshProductionCache,getFieldNotes,getManualNumbers,repChecklist,listPreferences,getWorkMatchups,getStoreMatchups,getDraftMatchups,getFinalMatchups,catalog:STORE_CATALOG});
+registerRepProfileRoutes(app,{loadReps:async office=>attachTrainingProduction((await buildBootstrap(office)).agents),resolveRepLogin,requestedOffice,refreshProductionCache,getFieldNotes,getManualNumbers,repChecklist,listPreferences,getWorkMatchups,getStoreMatchups,getDraftMatchups,getFinalMatchups,getResponsibilityHistory,catalog:STORE_CATALOG});
 
 app.get("/api/bootstrap", async (req, res, next) => {
   const office = requestedOffice(req);

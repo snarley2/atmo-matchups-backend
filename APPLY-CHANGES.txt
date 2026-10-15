@@ -1,0 +1,15 @@
+Apply these changed files over the existing project, preserving their folder paths.
+
+1. Frontend: extract frontend ZIP into the frontend project. Run npm run build and redeploy/restart the frontend.
+2. Backend: extract backend ZIP into the backend project. Keep your existing environment settings. Restart/redeploy the backend with SUPABASE_DB_URL configured. The new Responsibilities tables are created automatically on first use; supabase/responsibilities.sql is included.
+3. From the backend folder run: npm run update:production
+   This refreshes production and appends missing Agents into Supabase. Repeated imports avoid duplicate reps. Existing attendance, trainer settings and stable rep keys are preserved. Office aliases are normalized when reading Agents.
+
+Changes:
+- Attendance no longer displays Rep IDs.
+- Production supports Edmeston & Evans / Skye layouts without previous-week headers, keeps the first AI rep, supports initials and excludes operational headings.
+- Responsibilities has office filters, multiple weekly assignees from any office, daily substitutes, preserved assignment/substitute history, and a Responsibilities tab in expanded rep information. Trainers/admins manage; signed-in reps can view.
+- Create Matchups leaders/trainers have Create group buttons directly on their cards. Work Matchups rep cards have New group buttons for admins.
+- My Top 5 Stores is its own home tab for signed-in reps and admins.
+
+Validation: frontend production build, 12 frontend tests and 44 backend tests passed; populated Attendance/Create Matchups render checks and both group button render checks passed. SQL behavior was exercised with a mocked database; live Supabase migrations and production imports were not run here.

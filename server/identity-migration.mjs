@@ -1,3 +1,5 @@
+import crypto from 'node:crypto';
+import {isProductionRepName} from './production-csv.mjs';
 import {canonicalOffice} from '../offices.mjs';
 import {normalizeRepId,validRepId,uniqueNameMatch} from './rep-identity.mjs';
 // Agents own identity. Link a production ID without changing keys, offices,
@@ -35,6 +37,16 @@ export function migrateIdentityRows(tabs,records){
   const conflict=candidates.some(other=>normalizeRepId(other.repId)===normalizeRepId(matched.repId)&&!uniqueNameMatch([other],matched.repName));
   if(sameNameRows.length!==1||conflict){warnings.push(`Ambiguous ID for ${row[name]} in ${row[office]}; link manually in Attendance.`);continue}
   row[id]=normalizeRepId(matched.repId);
+ }
+ // Production discovery is append-only; all existing manual settings stay put.
+ const normalizeName=name=>String(name||'').normalize('NFKD').toLowerCase().replace(/[^\p{L}]/gu,'');
+ for(const record of records){
+  const repName=String(record.repName||'').replace(/[↑↓]/g,'').trim(),repOffice=canonicalOffice(record.office);
+  if(!record.office||!isProductionRepName(repName))continue;
+  const roster=agents.rows.slice(1).filter(row=>canonicalOffice(row[office])===repOffice);
+  if(roster.some(row=>(record.repId&&normalizeRepId(row[id]||row[key])===normalizeRepId(record.repId))||normalizeName(row[name])===normalizeName(repName)||uniqueNameMatch([row],repName,r=>r[name])))continue;
+  const values={repKey:crypto.randomUUID(),repName,office:repOffice,rep_id:validRepId(record.repId)?normalizeRepId(record.repId):'',repType:record.repType||'New Rep',team:'',teamLead:'',trainer:'',attendance:'in',experienceLevel:''};
+  agents.rows.push(h.map(field=>values[field]??''));
  }
  return {tabs:clones,aliases:[],warnings};
 }
